@@ -88,6 +88,7 @@ class GoldFundStrategyActivity : Activity() {
             setPadding(dp(16), dp(16), dp(16), dp(28))
             setBackgroundColor(pageColor)
         }
+
         val scroll = ScrollView(this).apply {
             isFillViewport = true
             addView(page)
@@ -150,6 +151,7 @@ class GoldFundStrategyActivity : Activity() {
             setBackgroundColor(blue)
             setOnClickListener { addOrUpdateFund() }
         }, matchWrap())
+
         page.addView(form, matchWrap())
 
         val listCard = card()
@@ -194,10 +196,11 @@ class GoldFundStrategyActivity : Activity() {
         parent.addView(label(title, 13, true).apply {
             setPadding(0, dp(7), 0, dp(2))
         })
+
         val field = EditText(this).apply {
             hint = hintText
             textSize = 14f
-            singleLine = true
+            maxLines = 1
             inputType = if (numeric) {
                 InputType.TYPE_CLASS_NUMBER or
                     InputType.TYPE_NUMBER_FLAG_DECIMAL or
@@ -210,9 +213,11 @@ class GoldFundStrategyActivity : Activity() {
             layoutDirection = View.LAYOUT_DIRECTION_LTR
             textAlignment = View.TEXT_ALIGNMENT_VIEW_END
         }
+
         parent.addView(field, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, dp(46)
         ).apply { bottomMargin = dp(3) })
+
         return field
     }
 
@@ -251,15 +256,18 @@ class GoldFundStrategyActivity : Activity() {
         if (oldIndex >= 0) funds[oldIndex] = fund else funds.add(fund)
         saveFunds()
         renderFunds()
+
         listOf(
             nameInput, asOfInput, priceInput, navInput, r5Input, r15Input,
             r30Input, premiumPercentileInput, volumeInput, spreadInput, flowInput
         ).forEach { it.text.clear() }
+
         Toast.makeText(this, "اطلاعات صندوق ذخیره شد.", Toast.LENGTH_SHORT).show()
     }
 
     private fun analyze() {
         resultArea.removeAllViews()
+
         if (funds.size < 3) {
             resultArea.addView(card().apply {
                 addView(label(
@@ -284,6 +292,7 @@ class GoldFundStrategyActivity : Activity() {
                 f.premiumPercentile <= 75.0 -> 7.0
                 else -> 0.0
             }
+
             val performanceScore = (performanceRanks[f.name] ?: 0.0) * 0.25
             val momentumScore = (momentumRanks[f.name] ?: 0.0) * 0.20
             val liquidityScore =
@@ -299,13 +308,16 @@ class GoldFundStrategyActivity : Activity() {
                     (momentumRanks[f.name] ?: 0.0) >= 50.0 &&
                     liquidityScore >= 7.5 ->
                     "نامزد بررسی خرید"
+
                 f.premiumPercentile >= 75.0 &&
                     total < 45.0 &&
                     performanceScore < 10.0 ->
                     "نامزد بررسی فروش/خروج"
+
                 total >= 65.0 -> "زیر نظر؛ هنوز سیگنال کامل نیست"
                 else -> "عدم معامله"
             }
+
             ScoredFund(
                 f, total, performanceScore, momentumScore,
                 liquidityScore, flowScore, action
@@ -366,6 +378,7 @@ class GoldFundStrategyActivity : Activity() {
         val allocation = card()
         allocation.addView(label("مدیریت سرمایه ۵۰۰ میلیون تومانی", 17, true))
         val buyCandidates = scored.filter { it.action == "نامزد بررسی خرید" }
+
         allocation.addView(label(
             if (buyCandidates.isEmpty()) {
                 "در حال حاضر هیچ صندوقی تمام شروط اولیه ورود را ندارد؛ طبق استراتژی، وجه نقد حفظ شود و معامله‌ای انجام نشود."
@@ -377,41 +390,53 @@ class GoldFundStrategyActivity : Activity() {
         resultArea.addView(allocation, matchWrap())
     }
 
-    private fun rankScores(values: Map<String, Double>, higherIsBetter: Boolean): Map<String, Double> {
+    private fun rankScores(
+        values: Map<String, Double>,
+        higherIsBetter: Boolean
+    ): Map<String, Double> {
         val sorted = values.entries.sortedWith(
             if (higherIsBetter) compareBy { it.value }
             else compareByDescending { it.value }
         )
+
         val result = mutableMapOf<String, Double>()
         if (sorted.size <= 1) return values.keys.associateWith { 50.0 }
+
         var i = 0
         while (i < sorted.size) {
             var j = i
             while (j + 1 < sorted.size && sorted[j + 1].value == sorted[i].value) j++
+
             val averageRank = (i + j) / 2.0
             val score = averageRank / (sorted.size - 1).toDouble() * 100.0
+
             for (k in i..j) result[sorted[k].key] = score
             i = j + 1
         }
+
         return result
     }
 
     private fun renderFunds() {
         listArea.removeAllViews()
+
         if (funds.isEmpty()) {
             listArea.addView(label("هنوز صندوقی ثبت نشده است.", 13, false))
             return
         }
+
         funds.forEach { fund ->
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 layoutDirection = View.LAYOUT_DIRECTION_RTL
             }
+
             row.addView(label(
                 "${fund.name} | ${fund.asOf} | حباب ${fmt(fund.premium)}٪ | درصدک ${fmt(fund.premiumPercentile)}",
                 12, true
             ), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
             row.addView(Button(this).apply {
                 text = "حذف"
                 textSize = 11f
@@ -423,6 +448,7 @@ class GoldFundStrategyActivity : Activity() {
                     resultArea.removeAllViews()
                 }
             })
+
             listArea.addView(row)
         }
     }
@@ -449,15 +475,23 @@ class GoldFundStrategyActivity : Activity() {
 
     private fun loadFunds() {
         val raw = prefs.getString("funds", null) ?: return
+
         try {
             val array = JSONArray(raw)
             for (i in 0 until array.length()) {
                 val o = array.getJSONObject(i)
                 funds.add(Fund(
-                    o.getString("name"), o.optString("asOf", "زمان ثبت نشده"), o.getDouble("price"), o.getDouble("nav"),
-                    o.getDouble("r5"), o.getDouble("r15"), o.getDouble("r30"),
-                    o.getDouble("premiumPercentile"), o.getDouble("volume"),
-                    o.getDouble("spread"), o.getDouble("flowPct")
+                    o.getString("name"),
+                    o.optString("asOf", "زمان ثبت نشده"),
+                    o.getDouble("price"),
+                    o.getDouble("nav"),
+                    o.getDouble("r5"),
+                    o.getDouble("r15"),
+                    o.getDouble("r30"),
+                    o.getDouble("premiumPercentile"),
+                    o.getDouble("volume"),
+                    o.getDouble("spread"),
+                    o.getDouble("flowPct")
                 ))
             }
         } catch (_: Exception) {
@@ -477,6 +511,7 @@ class GoldFundStrategyActivity : Activity() {
                     else -> ch
                 }
             }.joinToString("")
+
         return normalized.toDoubleOrNull()?.takeIf { it.isFinite() }
     }
 
