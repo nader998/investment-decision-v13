@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - feature/auto-gold-fund-data
 
 jobs:
   build:
