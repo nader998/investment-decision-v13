@@ -1,0 +1,353 @@
+package com.example.investmentdecision
+
+import android.app.Activity
+import android.os.Bundle
+import android.graphics.Color
+import android.graphics.Typeface
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
+import android.widget.Toast
+import org.json.JSONArray
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.text.NumberFormat
+import java.util.Locale
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+
+/**
+ * Read-only first stage of automatic gold-fund market data.
+ *
+ * TSETMC CDN endpoints are community-documented and not an official,
+ * versioned public API. Missing fields are intentionally left unavailable.
+ */
+class GoldFundAutoDataActivity : Activity() {
+
+    private data class Quote(
+        val symbol: String,
+        val name: String,
+        val insCode: String,
+        val date: String,
+        val marketPriceToman: Double?,
+        val navToman: Double?,
+        val tradeValueToman: Double?,
+        val spreadPercent: Double?
+    )
+
+    private lateinit var status: TextView
+    private lateinit var results: LinearLayout
+    private val ink = Color.rgb(30, 41, 59)
+    private val muted = Color.rgb(100, 116, 139)
+    private val blue = Color.rgb(21, 101, 192)
+    private val pageColor = Color.rgb(243, 246, 250)
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        window.statusBarColor = pageColor
+        window.navigationBarColor = pageColor
+        window.decorView.systemUiVisibility =
+            View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+
+        val page = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            setPadding(dp(16), dp(16), dp(16), dp(24))
+            setBackgroundColor(pageColor)
+        }
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            addView(page)
+        }
+
+        page.addView(text("دریافت خودکار اطلاعات صندوق‌های کالایی", 21, true, Gravity.CENTER))
+        page.addView(text(
+            "منبع مرحله اول: داده‌های بازار TSETMC. قیمت و ارزش معاملات از ریال به تومان تبدیل می‌شوند.",
+            13, false
+        ))
+        page.addView(text(
+            "درصدک حباب ۶۰روزه، بازده NAV و ورود پول واقعی هنوز از منبع قابل‌تأیید دریافت نمی‌شوند؛ بنابراین در این صفحه هیچ سیگنال خرید یا فروش صادر نمی‌شود.",
+            13, true
+        ))
+
+        val refresh = Button(this).apply {
+            text = "دریافت / به‌روزرسانی اطلاعات"
+            isAllCaps = false
+            textSize = 15f
+            setTextColor(Color.WHITE)
+            setBackgroundColor(blue)
+            setOnClickListener { loadData() }
+        }
+        page.addView(refresh, matchWrap())
+
+        status = text("برای دریافت اطلاعات، دکمه بالا را بزن.", 13, true)
+        page.addView(status)
+        results = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        page.addView(results)
+
+        page.addView(Button(this).apply {
+            text = "بازگشت"
+            isAllCaps = false
+            setOnClickListener { finish() }
+        }, matchWrap())
+
+        setContentView(scroll)
+    }
+
+    private fun loadData() {
+        status.text = "در حال اتصال به TSETMC و دریافت فهرست صندوق‌ها..."
+        results.removeAllViews()
+
+        Thread {
+            try {
+                val listJson = getJson(
+                    "https://cdn.tsetmc.com/api/ClosingPrice/GetTradeTop/CommodityFund/0/9999"
+                )
+                val rows = findArray(listJson, setOf("tradeTop", "funds"))
+                if (rows.length() == 0) {
+                    throw IllegalStateException("فهرست صندوق‌های کالایی خالی است.")
+                }
+
+                val candidates = mutableListOf<Triple<String, String, String>>()
+                for (i in 0 until rows.length()) {
+                    val item = rows.optJSONObject(i) ?: continue
+                    val instrument = item.optJSONObject("instrument") ?: item
+                    val code = firstString(instrument, "insCode", "inscode")
+                        ?: firstString(item, "insCode", "inscode")
+                        ?: continue
+                    val symbol = firstString(instrument, "lVal18AFC", "symbol")
+                        ?: firstString(item, "lVal18AFC", "symbol")
+                        ?: code
+                    val name = firstString(instrument, "lVal30", "name")
+                        ?: firstString(item, "lVal30", "name")
+                        ?: symbol
+                    if (candidates.none { it.third == code }) {
+                        candidates.add(Triple(symbol, name, code))
+                    }
+                }
+
+                if (candidates.isEmpty()) {
+                    throw IllegalStateException("فهرست دریافت شد، اما نماد و کد قابل‌استفاده در پاسخ پیدا نشد.")
+                }
+
+                // Limit parallel requests to avoid overloading the public market-data endpoint.
+                val pool = Executors.newFixedThreadPool(4)
+                val quotes = try {
+                    val tasks = candidates.take(100).map { item ->
+                        Callable { fetchQuote(item.first, item.second, item.third) }
+                    }
+                    pool.invokeAll(tasks, 55, TimeUnit.SECONDS)
+                        .mapNotNull { future ->
+                            try { if (future.isDone && !future.isCancelled) future.get() else null }
+                            catch (_: Exception) { null }
+                        }
+                } finally {
+                    pool.shutdownNow()
+                }
+
+                runOnUiThread {
+                    results.removeAllViews()
+                    if (quotes.isEmpty()) {
+                        status.text = "فهرست صندوق‌ها دریافت شد، اما اطلاعات قیمت هیچ نمادی قابل‌خواندن نبود."
+                    } else {
+                        status.text = "تعداد نمادهای شناسایی‌شده: ${candidates.size} | اطلاعات قیمت دریافت‌شده: ${quotes.size}"
+                        quotes.sortedBy { it.symbol }.forEach { addQuoteCard(it) }
+                        if (quotes.size < candidates.size) {
+                            results.addView(text(
+                                "توجه: برای بعضی نمادها پاسخ کامل دریافت نشد؛ تعداد نمادهای ناموفق: ${candidates.size - quotes.size}.",
+                                12, false
+                            ))
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    status.text = "دریافت اطلاعات ناموفق بود: ${e.message ?: "خطای ارتباط"}"
+                    Toast.makeText(this, "اتصال به منبع داده ناموفق بود.", Toast.LENGTH_LONG).show()
+                }
+            }
+        }.start()
+    }
+
+    private fun fetchQuote(symbol: String, name: String, insCode: String): Quote {
+        val snapshot = getJson(
+            "https://cdn.tsetmc.com/api/ClosingPrice/GetClosingPriceInfo/$insCode"
+        )
+        val priceObject = findObject(snapshot, "closingPriceInfo") ?: snapshot
+        val marketPrice = firstNumber(priceObject, "pDrCotVal", "pClosing")
+            ?.takeIf { it > 0.0 }?.div(10.0)
+        val tradeValue = firstNumber(priceObject, "qTotCap")
+            ?.takeIf { it >= 0.0 }?.div(10.0)
+        val date = buildDate(
+            firstNumber(priceObject, "dEven")?.toLong(),
+            firstNumber(priceObject, "hEven")?.toLong()
+        )
+
+        val nav = try {
+            val etfJson = getJson(
+                "https://cdn.tsetmc.com/api/Fund/GetETFByInsCode/$insCode"
+            )
+            val etf = findObject(etfJson, "etf") ?: etfJson
+            firstNumber(etf, "pRedTran")?.takeIf { it > 0.0 }?.div(10.0)
+        } catch (_: Exception) {
+            null
+        }
+
+        val spread = try {
+            val limitsJson = getJson("https://cdn.tsetmc.com/api/BestLimits/$insCode")
+            val limits = findArray(limitsJson, setOf("bestLimits"))
+            var bid = 0.0
+            var ask = 0.0
+            for (i in 0 until limits.length()) {
+                val level = limits.optJSONObject(i) ?: continue
+                val demand = firstNumber(level, "pd") ?: 0.0
+                val offer = firstNumber(level, "po") ?: 0.0
+                if (demand > 0.0 && (bid == 0.0 || demand > bid)) bid = demand
+                if (offer > 0.0 && (ask == 0.0 || offer < ask)) ask = offer
+            }
+            if (bid > 0.0 && ask > 0.0 && ask >= bid) {
+                ((ask - bid) / ((ask + bid) / 2.0)) * 100.0
+            } else null
+        } catch (_: Exception) {
+            null
+        }
+
+        return Quote(symbol, name, insCode, date, marketPrice, nav, tradeValue, spread)
+    }
+
+    private fun getJson(address: String): JSONObject {
+        val connection = (URL(address).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 10000
+            readTimeout = 15000
+            useCaches = false
+            setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            val code = connection.responseCode
+            if (code !in 200..299) throw IllegalStateException("HTTP $code")
+            val body = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            return JSONObject(body)
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun findArray(root: JSONObject, keys: Set<String>): JSONArray {
+        for (key in keys) {
+            val value = root.opt(key)
+            if (value is JSONArray) return value
+        }
+        val names = root.keys()
+        while (names.hasNext()) {
+            val value = root.opt(names.next())
+            if (value is JSONObject) {
+                val nested = findArrayOrNull(value, keys)
+                if (nested != null) return nested
+            }
+        }
+        return JSONArray()
+    }
+
+    private fun findArrayOrNull(root: JSONObject, keys: Set<String>): JSONArray? {
+        for (key in keys) {
+            val value = root.opt(key)
+            if (value is JSONArray) return value
+        }
+        return null
+    }
+
+    private fun findObject(root: JSONObject, key: String): JSONObject? {
+        val value = root.opt(key)
+        if (value is JSONObject) return value
+        if (value is JSONArray && value.length() > 0) return value.optJSONObject(0)
+        return null
+    }
+
+    private fun firstString(obj: JSONObject, vararg keys: String): String? {
+        for (key in keys) {
+            val value = obj.opt(key)
+            if (value != null && value != JSONObject.NULL) {
+                val string = value.toString().trim()
+                if (string.isNotEmpty() && string != "0") return string
+            }
+        }
+        return null
+    }
+
+    private fun firstNumber(obj: JSONObject, vararg keys: String): Double? {
+        for (key in keys) {
+            val value = obj.opt(key)
+            val number = when (value) {
+                is Number -> value.toDouble()
+                is String -> value.toDoubleOrNull()
+                else -> null
+            }
+            if (number != null && number.isFinite()) return number
+        }
+        return null
+    }
+
+    private fun buildDate(day: Long?, time: Long?): String {
+        if (day == null || day <= 0L) return "تاریخ در پاسخ موجود نیست"
+        val timeText = time?.toString()?.padStart(6, '0')
+        return if (timeText != null && timeText.length == 6) {
+            "$day - ${timeText.substring(0, 2)}:${timeText.substring(2, 4)}"
+        } else day.toString()
+    }
+
+    private fun addQuoteCard(q: Quote) {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(13), dp(11), dp(13), dp(11))
+            setBackgroundColor(Color.WHITE)
+        }
+        card.addView(text("${q.symbol} | ${q.name}", 15, true))
+        card.addView(text("زمان داده قیمت: ${q.date}", 11, false))
+        card.addView(text("قیمت بازار: ${money(q.marketPriceToman)} تومان", 13, true))
+        card.addView(text("NAV ابطال: ${money(q.navToman)} تومان", 13, false))
+        val premium = if (q.marketPriceToman != null && q.navToman != null && q.navToman > 0.0) {
+            "${fmt((q.marketPriceToman / q.navToman - 1.0) * 100.0)}٪"
+        } else "فاقد داده"
+        card.addView(text("فاصله قیمت بازار از NAV: $premium", 12, false))
+        card.addView(text("ارزش معاملات روز: ${money(q.tradeValueToman)} تومان", 12, false))
+        card.addView(text("اختلاف بهترین خرید و فروش: ${fmtOrMissing(q.spreadPercent)}٪", 12, false))
+        card.addView(text("بازده NAV و درصدک حباب ۶۰روزه: فاقد داده معتبر", 12, false))
+        card.addView(text("ورود پول واقعی: فاقد داده معتبر", 12, false))
+        results.addView(card, matchWrap())
+    }
+
+    private fun money(value: Double?): String =
+        if (value == null) "فاقد داده" else NumberFormat.getNumberInstance(Locale("fa", "IR"))
+            .apply { maximumFractionDigits = 0 }.format(value)
+
+    private fun fmt(value: Double): String = NumberFormat.getNumberInstance(Locale("fa", "IR"))
+        .apply { maximumFractionDigits = 2 }.format(value)
+
+    private fun fmtOrMissing(value: Double?): String = value?.let { fmt(it) } ?: "فاقد داده"
+
+    private fun text(value: String, size: Int, bold: Boolean, gravityValue: Int = Gravity.START) =
+        TextView(this).apply {
+            text = value
+            textSize = size.toFloat()
+            setTextColor(if (bold) ink else muted)
+            gravity = gravityValue
+            if (bold) typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, dp(3), 0, dp(3))
+        }
+
+    private fun matchWrap() = LinearLayout.LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT,
+        ViewGroup.LayoutParams.WRAP_CONTENT
+    ).apply { bottomMargin = dp(8) }
+
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density).toInt()
+}
