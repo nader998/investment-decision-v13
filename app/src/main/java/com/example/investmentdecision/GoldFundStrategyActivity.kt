@@ -1,6 +1,7 @@
 package com.example.investmentdecision
 
 import android.app.Activity
+import android.content.Intent
 import android.os.Bundle
 import android.graphics.Color
 import android.graphics.Typeface
@@ -128,6 +129,17 @@ class GoldFundStrategyActivity : Activity() {
             12, false
         ))
         page.addView(warning, matchWrap())
+
+        page.addView(Button(this).apply {
+            text = "دریافت خودکار اطلاعات صندوق‌های طلا"
+            isAllCaps = false
+            textSize = 15f
+            setTextColor(Color.WHITE)
+            setBackgroundColor(blue)
+            setOnClickListener {
+                startActivity(Intent(this@GoldFundStrategyActivity, GoldFundAutoDataActivity::class.java))
+            }
+        }, matchWrap())
 
         val form = card()
         form.addView(label("ثبت یا به‌روزرسانی اطلاعات صندوق", 18, true))
