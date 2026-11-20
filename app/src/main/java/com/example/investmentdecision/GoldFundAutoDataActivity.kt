@@ -283,8 +283,12 @@ class GoldFundAutoDataActivity : Activity() {
             }
         }
 
+        // Never replace a previously stored NAV with null when a source date is absent.
         prices.forEach { (day, close) ->
-            historyStore.upsert(insCode, day, close, navByDate[day])
+            val historicalNav = navByDate[day]
+            if (historicalNav != null) {
+                historyStore.upsert(insCode, day, close, historicalNav)
+            }
         }
     }
 
@@ -292,8 +296,10 @@ class GoldFundAutoDataActivity : Activity() {
         value.replace("ي", "ی").replace("ك", "ک")
             .replace(Regex("\\s+"), "").trim().lowercase(Locale.ROOT)
 
-    private fun normalizeHistoryDate(value: String): String? =
-        Regex("\\d{8}").find(value)?.value
+    private fun normalizeHistoryDate(value: String): String? {
+        val digits = value.filter { it.isDigit() }
+        return digits.takeIf { it.length >= 8 }?.take(8)
+    }
 
     private fun getJson(address: String): JSONObject {
         val connection = (URL(address).openConnection() as HttpURLConnection).apply {
