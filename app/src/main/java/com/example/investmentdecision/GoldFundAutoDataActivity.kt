@@ -182,8 +182,9 @@ class GoldFundAutoDataActivity : Activity() {
         val priceObject = findObject(snapshot, "closingPriceInfo") ?: snapshot
         val marketPrice = firstNumber(priceObject, "pDrCotVal", "pClosing")
             ?.takeIf { it > 0.0 }?.div(10.0)
-        val tradeValue = firstNumber(priceObject, "qTotCap")
-            ?.takeIf { it >= 0.0 }?.div(10.0)
+        // qTotCap is market capitalization in the community schema, not trade value.
+        // Do not mislabel it as turnover; leave turnover unavailable until verified.
+        val tradeValue: Double? = null
         val date = buildDate(
             firstNumber(priceObject, "dEven")?.toLong(),
             firstNumber(priceObject, "hEven")?.toLong()
@@ -317,7 +318,7 @@ class GoldFundAutoDataActivity : Activity() {
             "${fmt((q.marketPriceToman / q.navToman - 1.0) * 100.0)}٪"
         } else "فاقد داده"
         card.addView(text("فاصله قیمت بازار از NAV: $premium", 12, false))
-        card.addView(text("ارزش معاملات روز: ${money(q.tradeValueToman)} تومان", 12, false))
+        card.addView(text("ارزش معاملات روز: فاقد داده تأییدشده", 12, false))
         card.addView(text("اختلاف بهترین خرید و فروش: ${fmtOrMissing(q.spreadPercent)}٪", 12, false))
         card.addView(text("بازده NAV و درصدک حباب ۶۰روزه: فاقد داده معتبر", 12, false))
         card.addView(text("ورود پول واقعی: فاقد داده معتبر", 12, false))
