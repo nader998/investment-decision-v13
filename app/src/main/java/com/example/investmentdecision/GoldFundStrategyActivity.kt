@@ -223,63 +223,136 @@ class GoldFundStrategyActivity : Activity() {
 
     private fun addOrUpdateFund() {
         val name = nameInput.text.toString().trim()
-        val price = number(priceInput)
-        val nav = number(navInput)
-        val r5 = number(r5Input)
-        val r15 = number(r15Input)
-        val r30 = number(r30Input)
-        val percentile = number(premiumPercentileInput)
-        val volume = number(volumeInput)
-        val spread = number(spreadInput)
-        val flow = number(flowInput)
-
         val asOf = asOfInput.text.toString().trim()
-        if (name.isBlank() || asOf.isBlank() || price == null || nav == null || r5 == null ||
-            r15 == null || r30 == null || percentile == null ||
-            volume == null || spread == null || flow == null ||
-            price <= 0.0 || nav <= 0.0 || volume < 0.0 || spread < 0.0 ||
-            percentile !in 0.0..100.0
-        ) {
-            Toast.makeText(
-                this,
-                "همه فیلدها را با مقادیر معتبر تکمیل کن؛ درصدک حباب باید بین صفر و ۱۰۰ باشد.",
-                Toast.LENGTH_LONG
-            ).show()
+
+        if (name.isBlank()) {
+            showValidationError("نام صندوق خالی است.")
+            nameInput.requestFocus()
+            return
+        }
+        if (asOf.isBlank()) {
+            showValidationError("تاریخ و ساعت داده‌ها خالی است.")
+            asOfInput.requestFocus()
+            return
+        }
+
+        fun requiredNumber(field: EditText, title: String): Double? {
+            val raw = field.text.toString()
+            if (raw.isBlank()) {
+                showValidationError("$title خالی است.")
+                field.requestFocus()
+                return null
+            }
+            val value = number(field)
+            if (value == null) {
+                showValidationError("$title نامعتبر است؛ فقط عدد وارد کن.")
+                field.requestFocus()
+                return null
+            }
+            return value
+        }
+
+        val price = requiredNumber(priceInput, "قیمت بازار") ?: return
+        val nav = requiredNumber(navInput, "NAV") ?: return
+        val r5 = requiredNumber(r5Input, "بازده ۵ روزه") ?: return
+        val r15 = requiredNumber(r15Input, "بازده ۱۵ روزه") ?: return
+        val r30 = requiredNumber(r30Input, "بازده ۳۰ روزه") ?: return
+        val percentile = requiredNumber(premiumPercentileInput, "درصدک حباب ۶۰ روزه") ?: return
+        val volume = requiredNumber(volumeInput, "ارزش معاملات روزانه") ?: return
+        val spread = requiredNumber(spreadInput, "اختلاف قیمت خرید و فروش") ?: return
+        val flow = requiredNumber(flowInput, "خالص ورود پول") ?: return
+
+        if (price <= 0.0) {
+            showValidationError("قیمت بازار باید بزرگ‌تر از صفر باشد.")
+            priceInput.requestFocus()
+            return
+        }
+        if (nav <= 0.0) {
+            showValidationError("NAV باید بزرگ‌تر از صفر باشد.")
+            navInput.requestFocus()
+            return
+        }
+        if (percentile !in 0.0..100.0) {
+            showValidationError("درصدک حباب ۶۰ روزه باید بین صفر تا ۱۰۰ باشد.")
+            premiumPercentileInput.requestFocus()
+            return
+        }
+        if (volume < 0.0) {
+            showValidationError("ارزش معاملات روزانه نمی‌تواند منفی باشد.")
+            volumeInput.requestFocus()
+            return
+        }
+        if (spread < 0.0) {
+            showValidationError("اختلاف قیمت خرید و فروش نمی‌تواند منفی باشد.")
+            spreadInput.requestFocus()
             return
         }
 
         val fund = Fund(
-            name, asOf, price, nav, r5, r15, r30,
-            percentile, volume, spread, flow
+            name = name,
+            asOf = asOf,
+            price = price,
+            nav = nav,
+            r5 = r5,
+            r15 = r15,
+            r30 = r30,
+            premiumPercentile = percentile,
+            volume = volume,
+            spread = spread,
+            flowPct = flow
         )
-        val oldIndex = funds.indexOfFirst { it.name.equals(name, true) }
-        if (oldIndex >= 0) funds[oldIndex] = fund else funds.add(fund)
+
+        val existingIndex = funds.indexOfFirst {
+            it.name.equals(name, ignoreCase = true)
+        }
+
+        if (existingIndex >= 0) {
+            funds[existingIndex] = fund
+            Toast.makeText(this, "اطلاعات صندوق به‌روزرسانی شد.", Toast.LENGTH_SHORT).show()
+        } else {
+            funds.add(fund)
+            Toast.makeText(this, "صندوق ثبت شد.", Toast.LENGTH_SHORT).show()
+        }
+
         saveFunds()
         renderFunds()
+        clearInputs()
+    }
 
-        listOf(
-            nameInput, asOfInput, priceInput, navInput, r5Input, r15Input,
-            r30Input, premiumPercentileInput, volumeInput, spreadInput, flowInput
-        ).forEach { it.text.clear() }
+    private fun showValidationError(message: String) {
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+    }
 
-        Toast.makeText(this, "اطلاعات صندوق ذخیره شد.", Toast.LENGTH_SHORT).show()
+    private fun clearInputs() {
+        nameInput.text.clear()
+        asOfInput.text.clear()
+        priceInput.text.clear()
+        navInput.text.clear()
+        r5Input.text.clear()
+        r15Input.text.clear()
+        r30Input.text.clear()
+        premiumPercentileInput.text.clear()
+        volumeInput.text.clear()
+        spreadInput.text.clear()
+        flowInput.text.clear()
     }
 
     private fun analyze() {
         resultArea.removeAllViews()
 
-        if (funds.size < 3) {
+        if (funds.isEmpty()) {
             resultArea.addView(card().apply {
-                addView(label(
-                    "برای رتبه‌بندی نسبی حداقل ۳ صندوق ثبت کن؛ با تعداد بیشتر، مقایسه معنادارتر می‌شود.",
-                    14, true
-                ))
-            })
+                addView(label("ابتدا حداقل یک صندوق را ثبت کن.", 14, true))
+            }, matchWrap())
             return
         }
 
-        val performanceRanks = rankScores(funds.associate { it.name to it.mediumReturn }, true)
-        val momentumRanks = rankScores(funds.associate { it.name to it.r5 }, true)
+        val performanceRanks = rankScores(
+            funds.associate { it.name to it.mediumReturn }, true
+        )
+        val momentumRanks = rankScores(
+            funds.associate { it.name to it.r5 }, true
+        )
         val volumeRanks = rankScores(funds.associate { it.name to it.volume }, true)
         val spreadRanks = rankScores(funds.associate { it.name to it.spread }, false)
         val flowRanks = rankScores(funds.associate { it.name to it.flowPct }, true)
@@ -501,9 +574,13 @@ class GoldFundStrategyActivity : Activity() {
 
     private fun number(field: EditText): Double? {
         val normalized = field.text.toString().trim()
-            .replace(",", "")
             .replace("٬", "")
+            .replace(",", "")
             .replace("٫", ".")
+            .replace("،", "")
+            .replace("−", "-")
+            .replace("－", "-")
+            .replace("＋", "+")
             .map { ch ->
                 when (ch) {
                     in '۰'..'۹' -> ('0'.code + ch.code - '۰'.code).toChar()
@@ -511,6 +588,7 @@ class GoldFundStrategyActivity : Activity() {
                     else -> ch
                 }
             }.joinToString("")
+            .filterNot { it.isWhitespace() }
 
         return normalized.toDoubleOrNull()?.takeIf { it.isFinite() }
     }
