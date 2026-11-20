@@ -241,7 +241,7 @@ class GoldFundAutoDataActivity : Activity() {
 
     private fun fetchAndStoreHistory(insCode: String, fundName: String, symbol: String) {
         val historyStore = GoldFundHistoryStore(this)
-        val priceRoot = getJson("https://cdn.tsetmc.com/api/ClosingPrice/GetClosingPriceDailyList/$insCode/0")
+        val priceRoot = getJson("https://cdn.tsetmc.com/api/ClosingPrice/GetClosingPriceDailyList/$insCode/60")
         val priceRows = findArray(priceRoot, setOf("closingPriceDaily"))
         if (priceRows.length() == 0) return
 
@@ -253,13 +253,21 @@ class GoldFundAutoDataActivity : Activity() {
             prices[day] = close
         }
 
-        val fundListRoot = getJson("https://cdn.tsetmc.com/api/Fund/GetFunds/5")
-        val fundRows = findArray(fundListRoot, setOf("funds"))
+        val registry = synchronized(cachePrefs) {
+            val cached = cachePrefs.getString("commodity_funds_registry", null)
+            if (cached != null) JSONArray(cached) else {
+                val downloaded = findArray(
+                    getJson("https://cdn.tsetmc.com/api/Fund/GetFunds/5"), setOf("funds")
+                )
+                cachePrefs.edit().putString("commodity_funds_registry", downloaded.toString()).apply()
+                downloaded
+            }
+        }
         val wanted = setOf(normalizeFundName(fundName), normalizeFundName(symbol))
             .filter { it.isNotBlank() }.toSet()
         var registrationNumber: String? = null
-        for (i in 0 until fundRows.length()) {
-            val row = fundRows.optJSONObject(i) ?: continue
+        for (i in 0 until registry.length()) {
+            val row = registry.optJSONObject(i) ?: continue
             val names = listOf("mfName", "FundName", "name", "lVal18AFC", "symbol")
                 .mapNotNull { firstString(row, it) }.map { normalizeFundName(it) }
             if (names.any { it in wanted }) {
