@@ -63,6 +63,7 @@ class GoldFundStrategyActivity : Activity() {
     private lateinit var volumeInput: EditText
     private lateinit var spreadInput: EditText
     private lateinit var flowInput: EditText
+    private lateinit var autoImportArea: LinearLayout
 
     private val prefs by lazy {
         getSharedPreferences("gold_fund_strategy", MODE_PRIVATE)
@@ -141,6 +142,16 @@ class GoldFundStrategyActivity : Activity() {
             }
         }, matchWrap())
 
+        val importCard = card()
+        importCard.addView(label("ورود اطلاعات دریافت‌شده به محاسبه‌گر", 17, true))
+        importCard.addView(label(
+            "پس از دریافت اطلاعات در صفحه قبل، صندوق را از فهرست زیر انتخاب کن. قیمت، NAV، ارزش معاملات، اسپرد و در صورت وجود درصدک ۶۰روزه وارد می‌شوند. بازده NAV و جریان واقعی صدور/ابطال خودکار در دسترس نیستند و نباید با خالص خرید حقیقی جایگزین شوند.",
+            12, false
+        ))
+        autoImportArea = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        importCard.addView(autoImportArea)
+        page.addView(importCard, matchWrap())
+
         val form = card()
         form.addView(label("ثبت یا به‌روزرسانی اطلاعات صندوق", 18, true))
         nameInput = addInput(form, "نام صندوق", "مثلاً نام دقیق نماد/صندوق", false)
@@ -197,6 +208,79 @@ class GoldFundStrategyActivity : Activity() {
         loadFunds()
         renderFunds()
         setContentView(scroll)
+        renderAutoImportOptions()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::autoImportArea.isInitialized) renderAutoImportOptions()
+    }
+
+    private fun renderAutoImportOptions() {
+        if (!::autoImportArea.isInitialized) return
+        autoImportArea.removeAllViews()
+        val cache = getSharedPreferences("tsetmc_fund_cache", MODE_PRIVATE)
+        val raw = cache.getString("last_quotes", null)
+        if (raw.isNullOrBlank()) {
+            autoImportArea.addView(label(
+                "هنوز داده‌ای دریافت نشده است. ابتدا دکمه دریافت خودکار اطلاعات را بزن.",
+                12, false
+            ))
+            return
+        }
+        try {
+            val quotes = JSONArray(raw)
+            if (quotes.length() == 0) {
+                autoImportArea.addView(label("فهرست داده‌های ذخیره‌شده خالی است.", 12, false))
+                return
+            }
+            val history = GoldFundHistoryStore(this)
+            for (i in 0 until quotes.length()) {
+                val item = quotes.optJSONObject(i) ?: continue
+                val symbol = item.optString("symbol").ifBlank { item.optString("name") }
+                val name = item.optString("name").ifBlank { symbol }
+                val insCode = item.optString("insCode")
+                val price = item.optDouble("marketPriceToman", Double.NaN)
+                val nav = item.optDouble("navToman", Double.NaN)
+                val volume = item.optDouble("tradeValueToman", Double.NaN)
+                val spread = item.optDouble("spreadPercent", Double.NaN)
+                val date = item.optString("date", "تاریخ نامشخص")
+                val percentile = if (insCode.isNotBlank()) history.percentile60(insCode) else null
+                val button = Button(this).apply {
+                    text = "وارد کردن ${symbol} — قیمت ${if (price.isFinite()) fmt(price) else "ناموجود"}"
+                    isAllCaps = false
+                    textSize = 13f
+                    setOnClickListener {
+                        nameInput.setText(name)
+                        asOfInput.setText(date)
+                        priceInput.setText(if (price.isFinite() && price > 0.0) price.toString() else "")
+                        navInput.setText(if (nav.isFinite() && nav > 0.0) nav.toString() else "")
+                        volumeInput.setText(if (volume.isFinite() && volume >= 0.0) volume.toString() else "")
+                        spreadInput.setText(if (spread.isFinite() && spread >= 0.0) spread.toString() else "")
+                        premiumPercentileInput.setText(percentile?.toString() ?: "")
+                        r5Input.text.clear()
+                        r15Input.text.clear()
+                        r30Input.text.clear()
+                        flowInput.text.clear()
+                        Toast.makeText(
+                            this@GoldFundStrategyActivity,
+                            "داده‌های موجود وارد شد؛ بازده‌ها و جریان واقعی صدور/ابطال را فقط با منبع معتبر تکمیل کن.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+                autoImportArea.addView(button, matchWrap())
+                autoImportArea.addView(label(
+                    "NAV: ${if (nav.isFinite()) fmt(nav) else "ناموجود"} تومان | تاریخچه جفت‌شده: ${history.pairedObservationCount(insCode)} از ۶۰ روز | درصدک: ${percentile?.let { fmt(it) } ?: "ناموجود"}",
+                    11, false
+                ))
+            }
+        } catch (_: Exception) {
+            autoImportArea.addView(label(
+                "خواندن داده‌های ذخیره‌شده ممکن نشد؛ دوباره از صفحه دریافت اطلاعات، داده‌ها را دریافت کن.",
+                12, false
+            ))
+        }
     }
 
     private fun addInput(
