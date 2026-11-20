@@ -41,6 +41,7 @@ class GoldFundAutoDataActivity : Activity() {
         val marketPriceToman: Double?,
         val navToman: Double?,
         val tradeValueToman: Double?,
+        val netRealFlowToman: Double?,
         val spreadPercent: Double?
     )
 
@@ -194,9 +195,16 @@ class GoldFundAutoDataActivity : Activity() {
         val priceObject = findObject(snapshot, "closingPriceInfo") ?: snapshot
         val marketPrice = firstNumber(priceObject, "pDrCotVal", "pClosing")
             ?.takeIf { it > 0.0 }?.div(10.0)
-        // qTotCap is market capitalization in the community schema, not trade value.
-        // Do not mislabel it as turnover; leave turnover unavailable until verified.
-        val tradeValue: Double? = null
+        val dailyHistory = try {
+            val historyRoot = getJson("https://cdn.tsetmc.com/api/ClosingPrice/GetClosingPriceDailyList/$insCode/5")
+            findArray(historyRoot, setOf("closingPriceDaily"))
+        } catch (_: Exception) { JSONArray() }
+        val latestDaily = (0 until dailyHistory.length())
+            .mapNotNull { dailyHistory.optJSONObject(it) }
+            .maxByOrNull { firstNumber(it, "dEven") ?: 0.0 }
+        // qTotCap is total traded value in the TSETMC daily-price response (Rial).
+        val tradeValue = latestDaily?.let { firstNumber(it, "qTotCap") }
+            ?.takeIf { it >= 0.0 }?.div(10.0)
         val date = buildDate(
             firstNumber(priceObject, "dEven")?.toLong(),
             firstNumber(priceObject, "hEven")?.toLong()
@@ -211,6 +219,19 @@ class GoldFundAutoDataActivity : Activity() {
         } catch (_: Exception) {
             null
         }
+
+        val netRealFlow = try {
+            val flowRoot = getJson("https://cdn.tsetmc.com/api/ClientType/GetClientTypeHistory/$insCode")
+            val flowRows = findArray(flowRoot, setOf("clientType"))
+            val latestFlow = (0 until flowRows.length())
+                .mapNotNull { flowRows.optJSONObject(it) }
+                .maxByOrNull { firstNumber(it, "recDate") ?: 0.0 }
+            if (latestFlow == null) null else {
+                val buy = firstNumber(latestFlow, "buy_I_Value")
+                val sell = firstNumber(latestFlow, "sell_I_Value")
+                if (buy != null && sell != null) (buy - sell) / 10.0 else null
+            }
+        } catch (_: Exception) { null }
 
         val spread = try {
             val limitsJson = getJson("https://cdn.tsetmc.com/api/BestLimits/$insCode")
@@ -236,7 +257,7 @@ class GoldFundAutoDataActivity : Activity() {
         } catch (_: Exception) {
             // Current quote remains usable if historical endpoints are unavailable.
         }
-        return Quote(symbol, name, insCode, date, marketPrice, nav, tradeValue, spread)
+        return Quote(symbol, name, insCode, date, marketPrice, nav, tradeValue, netRealFlow, spread)
     }
 
     private fun fetchAndStoreHistory(insCode: String, fundName: String, symbol: String) {
@@ -403,6 +424,7 @@ class GoldFundAutoDataActivity : Activity() {
                 put("marketPriceToman", q.marketPriceToman ?: JSONObject.NULL)
                 put("navToman", q.navToman ?: JSONObject.NULL)
                 put("tradeValueToman", q.tradeValueToman ?: JSONObject.NULL)
+                put("netRealFlowToman", q.netRealFlowToman ?: JSONObject.NULL)
                 put("spreadPercent", q.spreadPercent ?: JSONObject.NULL)
             })
         }
@@ -420,7 +442,7 @@ class GoldFundAutoDataActivity : Activity() {
                     if (o.isNull(key)) null else o.optDouble(key).takeIf { it.isFinite() }
                 Quote(o.optString("symbol"), o.optString("name"), o.optString("insCode"),
                     o.optString("date"), n("marketPriceToman"), n("navToman"),
-                    n("tradeValueToman"), n("spreadPercent"))
+                    n("tradeValueToman"), n("netRealFlowToman"), n("spreadPercent"))
             }
         } catch (_: Exception) { emptyList() }
     }
@@ -462,7 +484,8 @@ class GoldFundAutoDataActivity : Activity() {
             "${fmt((q.marketPriceToman / q.navToman - 1.0) * 100.0)}٪"
         } else "فاقد داده"
         card.addView(text("فاصله قیمت بازار از NAV: $premium", 12, false))
-        card.addView(text("ارزش معاملات روز: فاقد داده تأییدشده", 12, false))
+        card.addView(text("ارزش معاملات روز: ${money(q.tradeValueToman)} تومان", 12, false))
+        card.addView(text("خالص خرید حقیقی: ${money(q.netRealFlowToman)} تومان (خرید حقیقی منهای فروش حقیقی)", 12, false))
         card.addView(text("اختلاف بهترین خرید و فروش: ${fmtOrMissing(q.spreadPercent)}٪", 12, false))
         val historyStore = GoldFundHistoryStore(this)
         val pairedCount = historyStore.pairedObservationCount(q.insCode)
@@ -474,7 +497,7 @@ class GoldFundAutoDataActivity : Activity() {
                 "تاریخچه جفت‌شده قیمت و NAV: $pairedCount روز از ۶۰ روز لازم | درصدک: هنوز قابل محاسبه نیست"
             }, 12, true
         ))
-        card.addView(text("ورود پول واقعی: فاقد داده معتبر", 12, false))
+        card.addView(text("توجه: خالص خرید حقیقی، اختلاف ارزش خرید و فروش حقیقی در معاملات ثانویه است و معادل ورود/خروج وجه نقد از صندوق از محل صدور و ابطال واحدها نیست.", 11, false))
         results.addView(card, matchWrap())
     }
 
