@@ -231,8 +231,69 @@ class GoldFundAutoDataActivity : Activity() {
             null
         }
 
+        try {
+            fetchAndStoreHistory(insCode, name, symbol)
+        } catch (_: Exception) {
+            // Current quote remains usable if historical endpoints are unavailable.
+        }
         return Quote(symbol, name, insCode, date, marketPrice, nav, tradeValue, spread)
     }
+
+    private fun fetchAndStoreHistory(insCode: String, fundName: String, symbol: String) {
+        val historyStore = GoldFundHistoryStore(this)
+        val priceRoot = getJson("https://cdn.tsetmc.com/api/ClosingPrice/GetClosingPriceDailyList/$insCode/0")
+        val priceRows = findArray(priceRoot, setOf("closingPriceDaily"))
+        if (priceRows.length() == 0) return
+
+        val prices = mutableMapOf<String, Double>()
+        for (i in 0 until priceRows.length()) {
+            val row = priceRows.optJSONObject(i) ?: continue
+            val day = firstNumber(row, "dEven")?.toLong()?.toString() ?: continue
+            val close = firstNumber(row, "pClosing")?.takeIf { it > 0.0 }?.div(10.0) ?: continue
+            prices[day] = close
+        }
+
+        val fundListRoot = getJson("https://cdn.tsetmc.com/api/Fund/GetFunds/5")
+        val fundRows = findArray(fundListRoot, setOf("funds"))
+        val wanted = setOf(normalizeFundName(fundName), normalizeFundName(symbol))
+            .filter { it.isNotBlank() }.toSet()
+        var registrationNumber: String? = null
+        for (i in 0 until fundRows.length()) {
+            val row = fundRows.optJSONObject(i) ?: continue
+            val names = listOf("mfName", "FundName", "name", "lVal18AFC", "symbol")
+                .mapNotNull { firstString(row, it) }.map { normalizeFundName(it) }
+            if (names.any { it in wanted }) {
+                registrationNumber = firstString(row, "regNo", "RegistrationNumber", "registrationNumber")
+                if (registrationNumber != null) break
+            }
+        }
+
+        val navByDate = mutableMapOf<String, Double>()
+        if (registrationNumber != null) {
+            val detailRoot = getJson("https://cdn.tsetmc.com/api/Fund/GetFundInDetail/$registrationNumber")
+            val stats = findArray(detailRoot, setOf("Stats", "stats", "fundStats"))
+            for (i in 0 until stats.length()) {
+                val row = stats.optJSONObject(i) ?: continue
+                val rawDate = firstString(row, "UpdateGregorianDate", "updateGregorianDate", "date", "dEven")
+                    ?: firstNumber(row, "dEven")?.toLong()?.toString() ?: continue
+                val day = normalizeHistoryDate(rawDate) ?: continue
+                val navValue = firstNumber(row, "RedemptionNAV", "redemptionNAV", "pRedTran", "nav")
+                    ?.takeIf { it > 0.0 }?.div(10.0) ?: continue
+                navByDate[day] = navValue
+            }
+        }
+
+        prices.forEach { (day, close) ->
+            historyStore.upsert(insCode, day, close, navByDate[day])
+        }
+    }
+
+    private fun normalizeFundName(value: String): String =
+        value.replace("ي", "ی").replace("ك", "ک")
+            .replace(Regex("\\s+"), "").trim().lowercase(Locale.ROOT)
+
+    private fun normalizeHistoryDate(value: String): String? =
+        Regex("\\d{8}").find(value)?.value
 
     private fun getJson(address: String): JSONObject {
         val connection = (URL(address).openConnection() as HttpURLConnection).apply {
@@ -389,7 +450,16 @@ class GoldFundAutoDataActivity : Activity() {
         card.addView(text("فاصله قیمت بازار از NAV: $premium", 12, false))
         card.addView(text("ارزش معاملات روز: فاقد داده تأییدشده", 12, false))
         card.addView(text("اختلاف بهترین خرید و فروش: ${fmtOrMissing(q.spreadPercent)}٪", 12, false))
-        card.addView(text("بازده NAV و درصدک حباب ۶۰روزه: فاقد داده معتبر", 12, false))
+        val historyStore = GoldFundHistoryStore(this)
+        val pairedCount = historyStore.pairedObservationCount(q.insCode)
+        val percentile = historyStore.percentile60(q.insCode)
+        card.addView(text(
+            if (percentile != null) {
+                "تاریخچه جفت‌شده: $pairedCount روز معاملاتی | درصدک حباب ۶۰روزه: ${fmt(percentile)}٪"
+            } else {
+                "تاریخچه جفت‌شده قیمت و NAV: $pairedCount روز از ۶۰ روز لازم | درصدک: هنوز قابل محاسبه نیست"
+            }, 12, true
+        ))
         card.addView(text("ورود پول واقعی: فاقد داده معتبر", 12, false))
         results.addView(card, matchWrap())
     }
