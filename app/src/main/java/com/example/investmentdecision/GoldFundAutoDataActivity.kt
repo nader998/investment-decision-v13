@@ -17,7 +17,10 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.NumberFormat
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -47,6 +50,7 @@ class GoldFundAutoDataActivity : Activity() {
     private val muted = Color.rgb(100, 116, 139)
     private val blue = Color.rgb(21, 101, 192)
     private val pageColor = Color.rgb(243, 246, 250)
+    private val cachePrefs by lazy { getSharedPreferences("tsetmc_fund_cache", MODE_PRIVATE) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -154,10 +158,18 @@ class GoldFundAutoDataActivity : Activity() {
                 runOnUiThread {
                     results.removeAllViews()
                     if (quotes.isEmpty()) {
-                        status.text = "فهرست صندوق‌ها دریافت شد، اما اطلاعات قیمت هیچ نمادی قابل‌خواندن نبود."
+                        showCachedData("فهرست صندوق‌ها دریافت شد، اما اطلاعات قیمت جدیدی قابل‌خواندن نبود.")
                     } else {
-                        status.text = "تعداد نمادهای شناسایی‌شده: ${candidates.size} | اطلاعات قیمت دریافت‌شده: ${quotes.size}"
-                        quotes.sortedBy { it.symbol }.forEach { addQuoteCard(it) }
+                        val orderedQuotes = quotes.sortedBy { it.symbol }
+                        saveCachedQuotes(orderedQuotes)
+                        val marketDate = orderedQuotes.mapNotNull { dateKey(it.date) }.maxOrNull()
+                        val today = tehranTodayKey()
+                        status.text = if (marketDate != null && marketDate < today) {
+                            "بازار امروز معامله جدیدی ثبت نکرده یا داده جدید منتشر نشده است. آخرین تاریخ داده: ${marketDate}. تعداد نمادها: ${candidates.size} | دریافت‌شده: ${quotes.size}"
+                        } else {
+                            "اطلاعات بازار دریافت شد. تعداد نمادهای شناسایی‌شده: ${candidates.size} | دریافت‌شده: ${quotes.size}"
+                        }
+                        orderedQuotes.forEach { addQuoteCard(it) }
                         if (quotes.size < candidates.size) {
                             results.addView(text(
                                 "توجه: برای بعضی نمادها پاسخ کامل دریافت نشد؛ تعداد نمادهای ناموفق: ${candidates.size - quotes.size}.",
@@ -168,8 +180,8 @@ class GoldFundAutoDataActivity : Activity() {
                 }
             } catch (e: Exception) {
                 runOnUiThread {
-                    status.text = "دریافت اطلاعات ناموفق بود: ${e.message ?: "خطای ارتباط"}"
-                    Toast.makeText(this, "اتصال به منبع داده ناموفق بود.", Toast.LENGTH_LONG).show()
+                    showCachedData("دریافت اطلاعات جدید ناموفق بود: ${e.message ?: "خطای ارتباط"}.")
+                    Toast.makeText(this, "در صورت وجود، آخرین اطلاعات ذخیره‌شده نمایش داده شد.", Toast.LENGTH_LONG).show()
                 }
             }
         }.start()
@@ -303,6 +315,63 @@ class GoldFundAutoDataActivity : Activity() {
             "$day - ${timeText.substring(0, 2)}:${timeText.substring(2, 4)}"
         } else day.toString()
     }
+
+
+    private fun saveCachedQuotes(quotes: List<Quote>) {
+        val array = JSONArray()
+        quotes.forEach { q ->
+            array.put(JSONObject().apply {
+                put("symbol", q.symbol)
+                put("name", q.name)
+                put("insCode", q.insCode)
+                put("date", q.date)
+                put("marketPriceToman", q.marketPriceToman ?: JSONObject.NULL)
+                put("navToman", q.navToman ?: JSONObject.NULL)
+                put("tradeValueToman", q.tradeValueToman ?: JSONObject.NULL)
+                put("spreadPercent", q.spreadPercent ?: JSONObject.NULL)
+            })
+        }
+        cachePrefs.edit().putString("last_quotes", array.toString())
+            .putLong("saved_at", System.currentTimeMillis()).apply()
+    }
+
+    private fun loadCachedQuotes(): List<Quote> {
+        val raw = cachePrefs.getString("last_quotes", null) ?: return emptyList()
+        return try {
+            val array = JSONArray(raw)
+            (0 until array.length()).mapNotNull { i ->
+                val o = array.optJSONObject(i) ?: return@mapNotNull null
+                fun n(key: String): Double? =
+                    if (o.isNull(key)) null else o.optDouble(key).takeIf { it.isFinite() }
+                Quote(o.optString("symbol"), o.optString("name"), o.optString("insCode"),
+                    o.optString("date"), n("marketPriceToman"), n("navToman"),
+                    n("tradeValueToman"), n("spreadPercent"))
+            }
+        } catch (_: Exception) { emptyList() }
+    }
+
+    private fun showCachedData(reason: String) {
+        results.removeAllViews()
+        val cached = loadCachedQuotes()
+        if (cached.isEmpty()) {
+            status.text = "$reason هیچ اطلاعات ذخیره‌شده‌ای برای نمایش وجود ندارد."
+            return
+        }
+        val savedAt = cachePrefs.getLong("saved_at", 0L)
+        val savedText = if (savedAt > 0L) SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.US)
+            .apply { timeZone = TimeZone.getTimeZone("Asia/Tehran") }.format(Date(savedAt))
+            else "نامشخص"
+        val latest = cached.mapNotNull { dateKey(it.date) }.maxOrNull() ?: "نامشخص"
+        status.text = "$reason آخرین تاریخ داده: $latest | ذخیره روی گوشی: $savedText | تعداد صندوق‌ها: ${cached.size}. داده‌ها زنده نیستند."
+        cached.sortedBy { it.symbol }.forEach { addQuoteCard(it) }
+    }
+
+    private fun dateKey(value: String): String? = Regex("\\d{8}").find(value)?.value
+
+    private fun tehranTodayKey(): String =
+        SimpleDateFormat("yyyyMMdd", Locale.US).apply {
+            timeZone = TimeZone.getTimeZone("Asia/Tehran")
+        }.format(Date())
 
     private fun addQuoteCard(q: Quote) {
         val card = LinearLayout(this).apply {
