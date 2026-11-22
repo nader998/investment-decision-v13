@@ -8,6 +8,7 @@ on:
       - feature/auto-gold-fund-data
       - feature/gold-fund-60d-history
       - release/gold-fund-final-candidate
+      - fix/gold-fund-auto-transfer
 
 jobs:
   build:
