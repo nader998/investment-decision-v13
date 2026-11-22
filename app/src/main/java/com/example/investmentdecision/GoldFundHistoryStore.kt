@@ -34,18 +34,19 @@ class GoldFundHistoryStore(context: Context) :
 
     fun upsert(insCode: String, date: String, closeToman: Double?, navToman: Double?) {
         if (insCode.isBlank() || !date.matches(Regex("\\d{8}"))) return
-        val values = ContentValues().apply {
+        val db = writableDatabase
+        val initial = ContentValues().apply {
             put("ins_code", insCode)
             put("trade_date", date)
-            if (closeToman != null && closeToman > 0.0) put("close_toman", closeToman)
-            else putNull("close_toman")
-            if (navToman != null && navToman > 0.0) put("nav_toman", navToman)
-            else putNull("nav_toman")
             put("fetched_at", System.currentTimeMillis())
         }
-        writableDatabase.insertWithOnConflict(
-            "daily_history", null, values, SQLiteDatabase.CONFLICT_REPLACE
-        )
+        db.insertWithOnConflict("daily_history", null, initial, SQLiteDatabase.CONFLICT_IGNORE)
+        val updates = ContentValues().apply {
+            if (closeToman != null && closeToman > 0.0) put("close_toman", closeToman)
+            if (navToman != null && navToman > 0.0) put("nav_toman", navToman)
+            put("fetched_at", System.currentTimeMillis())
+        }
+        db.update("daily_history", updates, "ins_code = ? AND trade_date = ?", arrayOf(insCode, date))
     }
 
     data class PremiumPoint(val date: String, val premiumPercent: Double)
@@ -70,6 +71,27 @@ class GoldFundHistoryStore(context: Context) :
             }
         }
         return result
+    }
+
+    /** Return NAV performance over N trading sessions, using N+1 valid NAV observations. */
+    fun navReturnPercent(insCode: String, sessions: Int): Double? {
+        if (sessions <= 0 || insCode.isBlank()) return null
+        val values = mutableListOf<Double>()
+        readableDatabase.rawQuery(
+            """
+            SELECT nav_toman FROM daily_history
+            WHERE ins_code = ? AND nav_toman > 0
+            ORDER BY trade_date DESC LIMIT ?
+            """.trimIndent(),
+            arrayOf(insCode, (sessions + 1).toString())
+        ).use { cursor ->
+            while (cursor.moveToNext()) values.add(cursor.getDouble(0))
+        }
+        if (values.size < sessions + 1) return null
+        val latest = values.first()
+        val past = values[sessions]
+        if (latest <= 0.0 || past <= 0.0) return null
+        return ((latest / past) - 1.0) * 100.0
     }
 
     fun pairedObservationCount(insCode: String): Int {
