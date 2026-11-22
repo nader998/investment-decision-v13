@@ -33,7 +33,7 @@ class GoldFundStrategyActivity : Activity() {
         val premiumPercentile: Double,
         val volume: Double,
         val spread: Double,
-        val flowPct: Double
+        val flowPct: Double?
     ) {
         val premium: Double get() = (price / nav - 1.0) * 100.0
         val mediumReturn: Double get() = (r15 + r30) / 2.0
@@ -126,7 +126,7 @@ class GoldFundStrategyActivity : Activity() {
             13, false
         ))
         warning.addView(label(
-            "درصدک حباب باید از تاریخچه همان صندوق در ۶۰ روز معاملاتی اخیر محاسبه شده باشد؛ صفر یعنی در پایین‌ترین محدوده تاریخی و ۱۰۰ یعنی در بالاترین محدوده. زمان داده همه صندوق‌ها باید تا حد امکان یکسان باشد و ترکیب دارایی صندوق‌های مقایسه‌شده نیز باید مشابه باشد.",
+            "درصدک حباب از تاریخچه ۶۰ مشاهده معاملاتی جفت‌شده قیمت و NAV محاسبه می‌شود. بازده‌ها نیز بر اساس NAV و تعداد جلسات معاملاتی محاسبه می‌شوند؛ اگر تاریخچه کافی نباشد، فیلد خالی می‌ماند.",
             12, false
         ))
         page.addView(warning, matchWrap())
@@ -145,7 +145,7 @@ class GoldFundStrategyActivity : Activity() {
         val importCard = card()
         importCard.addView(label("ورود اطلاعات دریافت‌شده به محاسبه‌گر", 17, true))
         importCard.addView(label(
-            "پس از دریافت اطلاعات در صفحه قبل، صندوق را از فهرست زیر انتخاب کن. قیمت، NAV، ارزش معاملات، اسپرد و در صورت وجود درصدک ۶۰روزه وارد می‌شوند. بازده NAV و جریان واقعی صدور/ابطال خودکار در دسترس نیستند و نباید با خالص خرید حقیقی جایگزین شوند.",
+            "پس از دریافت اطلاعات در صفحه قبل، صندوق را انتخاب کن. قیمت، NAV، ارزش معاملات، اسپرد، بازده NAV در ۵/۱۵/۳۰ جلسه و در صورت وجود درصدک ۶۰روزه وارد می‌شوند. جریان واقعی صدور/ابطال فعلاً خودکار دریافت نمی‌شود؛ بنابراین ثبت اطلاعات ممکن است، اما تا تکمیل آن رتبه‌بندی و سیگنال صادر نمی‌شود.",
             12, false
         ))
         autoImportArea = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -246,6 +246,9 @@ class GoldFundStrategyActivity : Activity() {
                 val spread = item.optDouble("spreadPercent", Double.NaN)
                 val date = item.optString("date", "تاریخ نامشخص")
                 val percentile = if (insCode.isNotBlank()) history.percentile60(insCode) else null
+                val r5 = if (insCode.isNotBlank()) history.navReturnPercent(insCode, 5) else null
+                val r15 = if (insCode.isNotBlank()) history.navReturnPercent(insCode, 15) else null
+                val r30 = if (insCode.isNotBlank()) history.navReturnPercent(insCode, 30) else null
                 val button = Button(this).apply {
                     text = "وارد کردن ${symbol} — قیمت ${if (price.isFinite()) fmt(price) else "ناموجود"}"
                     isAllCaps = false
@@ -258,13 +261,13 @@ class GoldFundStrategyActivity : Activity() {
                         volumeInput.setText(if (volume.isFinite() && volume >= 0.0) volume.toString() else "")
                         spreadInput.setText(if (spread.isFinite() && spread >= 0.0) spread.toString() else "")
                         premiumPercentileInput.setText(percentile?.toString() ?: "")
-                        r5Input.text.clear()
-                        r15Input.text.clear()
-                        r30Input.text.clear()
+                        r5Input.setText(r5?.toString() ?: "")
+                        r15Input.setText(r15?.toString() ?: "")
+                        r30Input.setText(r30?.toString() ?: "")
                         flowInput.text.clear()
                         Toast.makeText(
                             this@GoldFundStrategyActivity,
-                            "داده‌های موجود وارد شد؛ بازده‌ها و جریان واقعی صدور/ابطال را فقط با منبع معتبر تکمیل کن.",
+                            "داده‌های موجود وارد شد؛ جریان واقعی صدور/ابطال فعلاً در منبع خودکار موجود نیست و نباید با خالص خرید حقیقی جایگزین شود.",
                             Toast.LENGTH_LONG
                         ).show()
                     }
@@ -356,7 +359,12 @@ class GoldFundStrategyActivity : Activity() {
         val percentile = requiredNumber(premiumPercentileInput, "درصدک حباب ۶۰ روزه") ?: return
         val volume = requiredNumber(volumeInput, "ارزش معاملات روزانه") ?: return
         val spread = requiredNumber(spreadInput, "اختلاف قیمت خرید و فروش") ?: return
-        val flow = requiredNumber(flowInput, "خالص ورود پول") ?: return
+        val flow = if (flowInput.text.isBlank()) null else number(flowInput)
+        if (flowInput.text.isNotBlank() && flow == null) {
+            showValidationError("خالص ورود پول نامعتبر است؛ فقط عدد وارد کن.")
+            flowInput.requestFocus()
+            return
+        }
 
         if (price <= 0.0) {
             showValidationError("قیمت بازار باید بزرگ‌تر از صفر باشد.")
@@ -451,9 +459,17 @@ class GoldFundStrategyActivity : Activity() {
         )
         val volumeRanks = rankScores(funds.associate { it.name to it.volume }, true)
         val spreadRanks = rankScores(funds.associate { it.name to it.spread }, false)
-        val flowRanks = rankScores(funds.associate { it.name to it.flowPct }, true)
+        val completeFunds = funds.filter { it.flowPct != null }
+        if (completeFunds.isEmpty()) {
+            resultArea.addView(card().apply {
+                addView(label("اطلاعات صندوق ذخیره شد، اما برای رتبه‌بندی هنوز جریان واقعی ورود/خروج پول معتبر در دسترس نیست. هیچ سیگنال خرید یا فروشی صادر نمی‌شود.", 14, true))
+                addView(label("خالص خرید حقیقی معاملات ثانویه جایگزین جریان صدور و ابطال صندوق نیست.", 12, false))
+            }, matchWrap())
+            return
+        }
+        val flowRanks = rankScores(completeFunds.associate { it.name to it.flowPct!! }, true)
 
-        val scored = funds.map { f ->
+        val scored = completeFunds.map { f ->
             val premiumScore = when {
                 f.premiumPercentile <= 10.0 -> 30.0
                 f.premiumPercentile <= 25.0 -> 24.0
@@ -636,7 +652,7 @@ class GoldFundStrategyActivity : Activity() {
                 put("premiumPercentile", f.premiumPercentile)
                 put("volume", f.volume)
                 put("spread", f.spread)
-                put("flowPct", f.flowPct)
+                if (f.flowPct != null) put("flowPct", f.flowPct) else put("flowPct", JSONObject.NULL)
             })
         }
         prefs.edit().putString("funds", array.toString()).apply()
@@ -660,7 +676,7 @@ class GoldFundStrategyActivity : Activity() {
                     o.getDouble("premiumPercentile"),
                     o.getDouble("volume"),
                     o.getDouble("spread"),
-                    o.getDouble("flowPct")
+                    if (o.isNull("flowPct")) null else o.optDouble("flowPct")
                 ))
             }
         } catch (_: Exception) {
