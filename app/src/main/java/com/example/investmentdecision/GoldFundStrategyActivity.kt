@@ -27,16 +27,16 @@ class GoldFundStrategyActivity : Activity() {
         val asOf: String,
         val price: Double,
         val nav: Double,
-        val r5: Double,
-        val r15: Double,
-        val r30: Double,
-        val premiumPercentile: Double,
-        val volume: Double,
-        val spread: Double,
+        val r5: Double?,
+        val r15: Double?,
+        val r30: Double?,
+        val premiumPercentile: Double?,
+        val volume: Double?,
+        val spread: Double?,
         val flowPct: Double?
     ) {
         val premium: Double get() = (price / nav - 1.0) * 100.0
-        val mediumReturn: Double get() = (r15 + r30) / 2.0
+        val mediumReturn: Double? get() = if (r15 != null && r30 != null) (r15 + r30) / 2.0 else null
     }
 
     private data class ScoredFund(
@@ -353,12 +353,19 @@ class GoldFundStrategyActivity : Activity() {
 
         val price = requiredNumber(priceInput, "قیمت بازار") ?: return
         val nav = requiredNumber(navInput, "NAV") ?: return
-        val r5 = requiredNumber(r5Input, "بازده ۵ روزه") ?: return
-        val r15 = requiredNumber(r15Input, "بازده ۱۵ روزه") ?: return
-        val r30 = requiredNumber(r30Input, "بازده ۳۰ روزه") ?: return
-        val percentile = requiredNumber(premiumPercentileInput, "درصدک حباب ۶۰ روزه") ?: return
-        val volume = requiredNumber(volumeInput, "ارزش معاملات روزانه") ?: return
-        val spread = requiredNumber(spreadInput, "اختلاف قیمت خرید و فروش") ?: return
+        fun optionalNumber(field: EditText, title: String): Double? {
+            if (field.text.isBlank()) return null
+            val value = number(field)
+            if (value == null) showValidationError("$title نامعتبر است؛ فقط عدد وارد کن.")
+            return value
+        }
+        val r5 = optionalNumber(r5Input, "بازده ۵ روزه")
+        val r15 = optionalNumber(r15Input, "بازده ۱۵ روزه")
+        val r30 = optionalNumber(r30Input, "بازده ۳۰ روزه")
+        val percentile = optionalNumber(premiumPercentileInput, "درصدک حباب ۶۰ روزه")
+        val volume = optionalNumber(volumeInput, "ارزش معاملات روزانه")
+        val spread = optionalNumber(spreadInput, "اختلاف قیمت خرید و فروش")
+        if (listOf(r5Input, r15Input, r30Input, premiumPercentileInput, volumeInput, spreadInput).any { it.text.isNotBlank() && number(it) == null }) return
         val flow = if (flowInput.text.isBlank()) null else number(flowInput)
         if (flowInput.text.isNotBlank() && flow == null) {
             showValidationError("خالص ورود پول نامعتبر است؛ فقط عدد وارد کن.")
@@ -376,17 +383,17 @@ class GoldFundStrategyActivity : Activity() {
             navInput.requestFocus()
             return
         }
-        if (percentile !in 0.0..100.0) {
+        if (percentile != null && percentile !in 0.0..100.0) {
             showValidationError("درصدک حباب ۶۰ روزه باید بین صفر تا ۱۰۰ باشد.")
             premiumPercentileInput.requestFocus()
             return
         }
-        if (volume < 0.0) {
+        if (volume != null && volume < 0.0) {
             showValidationError("ارزش معاملات روزانه نمی‌تواند منفی باشد.")
             volumeInput.requestFocus()
             return
         }
-        if (spread < 0.0) {
+        if (spread != null && spread < 0.0) {
             showValidationError("اختلاف قیمت خرید و فروش نمی‌تواند منفی باشد.")
             spreadInput.requestFocus()
             return
@@ -451,15 +458,11 @@ class GoldFundStrategyActivity : Activity() {
             return
         }
 
-        val performanceRanks = rankScores(
-            funds.associate { it.name to it.mediumReturn }, true
-        )
-        val momentumRanks = rankScores(
-            funds.associate { it.name to it.r5 }, true
-        )
-        val volumeRanks = rankScores(funds.associate { it.name to it.volume }, true)
-        val spreadRanks = rankScores(funds.associate { it.name to it.spread }, false)
-        val completeFunds = funds.filter { it.flowPct != null }
+        val completeFunds = funds.filter {
+            it.r5 != null && it.r15 != null && it.r30 != null &&
+                it.premiumPercentile != null && it.volume != null &&
+                it.spread != null && it.flowPct != null
+        }
         if (completeFunds.isEmpty()) {
             resultArea.addView(card().apply {
                 addView(label("اطلاعات صندوق ذخیره شد، اما برای رتبه‌بندی هنوز جریان واقعی ورود/خروج پول معتبر در دسترس نیست. هیچ سیگنال خرید یا فروشی صادر نمی‌شود.", 14, true))
@@ -467,14 +470,18 @@ class GoldFundStrategyActivity : Activity() {
             }, matchWrap())
             return
         }
+        val performanceRanks = rankScores(completeFunds.associate { it.name to it.mediumReturn!! }, true)
+        val momentumRanks = rankScores(completeFunds.associate { it.name to it.r5!! }, true)
+        val volumeRanks = rankScores(completeFunds.associate { it.name to it.volume!! }, true)
+        val spreadRanks = rankScores(completeFunds.associate { it.name to it.spread!! }, false)
         val flowRanks = rankScores(completeFunds.associate { it.name to it.flowPct!! }, true)
 
         val scored = completeFunds.map { f ->
             val premiumScore = when {
-                f.premiumPercentile <= 10.0 -> 30.0
-                f.premiumPercentile <= 25.0 -> 24.0
-                f.premiumPercentile <= 50.0 -> 15.0
-                f.premiumPercentile <= 75.0 -> 7.0
+                f.premiumPercentile!! <= 10.0 -> 30.0
+                f.premiumPercentile!! <= 25.0 -> 24.0
+                f.premiumPercentile!! <= 50.0 -> 15.0
+                f.premiumPercentile!! <= 75.0 -> 7.0
                 else -> 0.0
             }
 
@@ -488,13 +495,13 @@ class GoldFundStrategyActivity : Activity() {
                 momentumScore + liquidityScore + flowScore
 
             val action = when {
-                f.premiumPercentile <= 25.0 &&
+                f.premiumPercentile!! <= 25.0 &&
                     total >= 80.0 &&
                     (momentumRanks[f.name] ?: 0.0) >= 50.0 &&
                     liquidityScore >= 7.5 ->
                     "نامزد بررسی خرید"
 
-                f.premiumPercentile >= 75.0 &&
+                f.premiumPercentile!! >= 75.0 &&
                     total < 45.0 &&
                     performanceScore < 10.0 ->
                     "نامزد بررسی فروش/خروج"
@@ -534,11 +541,11 @@ class GoldFundStrategyActivity : Activity() {
                 12, false
             ))
             c.addView(label(
-                "حباب بازار نسبت به NAV: ${fmt(f.premium)}٪ | درصدک ۶۰روزه: ${fmt(f.premiumPercentile)}",
+                "حباب بازار نسبت به NAV: ${fmt(f.premium)}٪ | درصدک ۶۰روزه: ${f.premiumPercentile?.let { fmt(it) } ?: "ناموجود"}",
                 13, false
             ))
             c.addView(label(
-                "بازده ۵/۱۵/۳۰ روزه: ${fmt(f.r5)}٪ / ${fmt(f.r15)}٪ / ${fmt(f.r30)}٪",
+                "بازده ۵/۱۵/۳۰ روزه: ${f.r5?.let { fmt(it) } ?: "ناموجود"}٪ / ${f.r15?.let { fmt(it) } ?: "ناموجود"}٪ / ${f.r30?.let { fmt(it) } ?: "ناموجود"}٪",
                 13, false
             ))
             c.addView(label(
@@ -618,7 +625,7 @@ class GoldFundStrategyActivity : Activity() {
             }
 
             row.addView(label(
-                "${fund.name} | ${fund.asOf} | حباب ${fmt(fund.premium)}٪ | درصدک ${fmt(fund.premiumPercentile)}",
+                "${fund.name} | ${fund.asOf} | حباب ${fmt(fund.premium)}٪ | درصدک ${fund.premiumPercentile?.let { fmt(it) } ?: "ناموجود"}",
                 12, true
             ), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
@@ -646,12 +653,12 @@ class GoldFundStrategyActivity : Activity() {
                 put("asOf", f.asOf)
                 put("price", f.price)
                 put("nav", f.nav)
-                put("r5", f.r5)
-                put("r15", f.r15)
-                put("r30", f.r30)
-                put("premiumPercentile", f.premiumPercentile)
-                put("volume", f.volume)
-                put("spread", f.spread)
+                put("r5", f.r5 ?: JSONObject.NULL)
+                put("r15", f.r15 ?: JSONObject.NULL)
+                put("r30", f.r30 ?: JSONObject.NULL)
+                put("premiumPercentile", f.premiumPercentile ?: JSONObject.NULL)
+                put("volume", f.volume ?: JSONObject.NULL)
+                put("spread", f.spread ?: JSONObject.NULL)
                 if (f.flowPct != null) put("flowPct", f.flowPct) else put("flowPct", JSONObject.NULL)
             })
         }
@@ -670,12 +677,12 @@ class GoldFundStrategyActivity : Activity() {
                     o.optString("asOf", "زمان ثبت نشده"),
                     o.getDouble("price"),
                     o.getDouble("nav"),
-                    o.getDouble("r5"),
-                    o.getDouble("r15"),
-                    o.getDouble("r30"),
-                    o.getDouble("premiumPercentile"),
-                    o.getDouble("volume"),
-                    o.getDouble("spread"),
+                    if (o.isNull("r5")) null else o.optDouble("r5"),
+                    if (o.isNull("r15")) null else o.optDouble("r15"),
+                    if (o.isNull("r30")) null else o.optDouble("r30"),
+                    if (o.isNull("premiumPercentile")) null else o.optDouble("premiumPercentile"),
+                    if (o.isNull("volume")) null else o.optDouble("volume"),
+                    if (o.isNull("spread")) null else o.optDouble("spread"),
                     if (o.isNull("flowPct")) null else o.optDouble("flowPct")
                 ))
             }
