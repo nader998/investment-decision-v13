@@ -20,6 +20,7 @@ import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import android.icu.util.PersianCalendar
 import java.util.TimeZone
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
@@ -42,7 +43,13 @@ class GoldFundAutoDataActivity : Activity() {
         val navToman: Double?,
         val tradeValueToman: Double?,
         val netRealFlowToman: Double?,
-        val spreadPercent: Double?
+        val spreadPercent: Double?,
+        val return5: Double?,
+        val return15: Double?,
+        val return30: Double?,
+        val premiumPercentile60: Double?,
+        val pairedHistoryCount: Int,
+        val historyStatus: String
     )
 
     private lateinit var status: TextView
@@ -252,19 +259,32 @@ class GoldFundAutoDataActivity : Activity() {
             null
         }
 
-        try {
+        val historyMetrics = try {
             fetchAndStoreHistory(insCode, name, symbol)
-        } catch (_: Exception) {
-            // Current quote remains usable if historical endpoints are unavailable.
+        } catch (e: Exception) {
+            HistoryMetrics(null, null, null, null, 0, "خطای تاریخچه: ${e.message ?: "نامشخص"}")
         }
-        return Quote(symbol, name, insCode, date, marketPrice, nav, tradeValue, netRealFlow, spread)
+        return Quote(
+            symbol, name, insCode, date, marketPrice, nav, tradeValue, netRealFlow, spread,
+            historyMetrics.return5, historyMetrics.return15, historyMetrics.return30,
+            historyMetrics.percentile60, historyMetrics.pairedCount, historyMetrics.status
+        )
     }
 
-    private fun fetchAndStoreHistory(insCode: String, fundName: String, symbol: String) {
+    private data class HistoryMetrics(
+        val return5: Double?,
+        val return15: Double?,
+        val return30: Double?,
+        val percentile60: Double?,
+        val pairedCount: Int,
+        val status: String
+    )
+
+    private fun fetchAndStoreHistory(insCode: String, fundName: String, symbol: String): HistoryMetrics {
         val historyStore = GoldFundHistoryStore(this)
         val priceRoot = getJson("https://cdn.tsetmc.com/api/ClosingPrice/GetClosingPriceDailyList/$insCode/60")
         val priceRows = findArray(priceRoot, setOf("closingPriceDaily"))
-        if (priceRows.length() == 0) return
+        if (priceRows.length() == 0) return HistoryMetrics(null, null, null, null, 0, "تاریخچه قیمت خالی است")
 
         val prices = mutableMapOf<String, Double>()
         for (i in 0 until priceRows.length()) {
@@ -274,15 +294,17 @@ class GoldFundAutoDataActivity : Activity() {
             prices[day] = close
         }
 
-        val registry = synchronized(cachePrefs) {
+        // Refresh the fund registry on every run; a permanently cached registry can become stale.
+        val downloadedRegistry = findArray(
+            getJson("https://cdn.tsetmc.com/api/Fund/GetFunds/5"),
+            setOf("funds", "fund", "items")
+        )
+        val registry = if (downloadedRegistry.length() > 0) {
+            cachePrefs.edit().putString("commodity_funds_registry", downloadedRegistry.toString()).apply()
+            downloadedRegistry
+        } else {
             val cached = cachePrefs.getString("commodity_funds_registry", null)
-            if (cached != null) JSONArray(cached) else {
-                val downloaded = findArray(
-                    getJson("https://cdn.tsetmc.com/api/Fund/GetFunds/5"), setOf("funds")
-                )
-                cachePrefs.edit().putString("commodity_funds_registry", downloaded.toString()).apply()
-                downloaded
-            }
+            if (cached != null) JSONArray(cached) else JSONArray()
         }
         val wanted = setOf(normalizeFundName(fundName), normalizeFundName(symbol))
             .filter { it.isNotBlank() }.toSet()
@@ -319,6 +341,19 @@ class GoldFundAutoDataActivity : Activity() {
                 historyStore.upsert(insCode, day, close, historicalNav)
             }
         }
+
+        val paired = historyStore.pairedObservationCount(insCode)
+        val r5 = historyStore.navReturnPercent(insCode, 5)
+        val r15 = historyStore.navReturnPercent(insCode, 15)
+        val r30 = historyStore.navReturnPercent(insCode, 30)
+        val percentile = historyStore.percentile60(insCode)
+        val status = when {
+            paired >= 60 -> "تاریخچه قیمت و NAV کامل است"
+            registrationNumber == null -> "کد ثبت صندوق در فهرست TSETMC پیدا نشد؛ نام/نماد تطبیق داده نشد"
+            navByDate.isEmpty() -> "NAV تاریخی از پاسخ صندوق استخراج نشد"
+            else -> "تاریخچه جفت‌شده $paired روز است؛ برای درصدک ۶۰روزه کافی نیست"
+        }
+        return HistoryMetrics(r5, r15, r30, percentile, paired, status)
     }
 
     private fun normalizeFundName(value: String): String =
@@ -326,8 +361,30 @@ class GoldFundAutoDataActivity : Activity() {
             .replace(Regex("\\s+"), "").trim().lowercase(Locale.ROOT)
 
     private fun normalizeHistoryDate(value: String): String? {
-        val digits = value.filter { it.isDigit() }
-        return digits.takeIf { it.length >= 8 }?.take(8)
+        val raw = value.trim()
+        val digits = raw.filter { it.isDigit() }
+        if (digits.length < 8) return null
+        val firstEight = digits.take(8)
+        // TSETMC daily prices use Solar Hijri YYYYMMDD. Fund detail dates are often
+        // Gregorian ISO strings; convert those before joining the two histories.
+        if ((raw.startsWith("19") || raw.startsWith("20")) &&
+            (raw.contains("-") || raw.contains("/"))) {
+            return try {
+                val datePart = raw.take(10).replace('/', '-')
+                val parsed = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply {
+                    isLenient = false
+                    timeZone = TimeZone.getTimeZone("UTC")
+                }.parse(datePart) ?: return null
+                val persian = PersianCalendar().apply { timeInMillis = parsed.time }
+                "%04d%02d%02d".format(
+                    Locale.US,
+                    persian.get(android.icu.util.Calendar.YEAR),
+                    persian.get(android.icu.util.Calendar.MONTH) + 1,
+                    persian.get(android.icu.util.Calendar.DAY_OF_MONTH)
+                )
+            } catch (_: Exception) { null }
+        }
+        return firstEight
     }
 
     private fun getJson(address: String): JSONObject {
@@ -369,6 +426,18 @@ class GoldFundAutoDataActivity : Activity() {
         for (key in keys) {
             val value = root.opt(key)
             if (value is JSONArray) return value
+        }
+        val names = root.keys()
+        while (names.hasNext()) {
+            when (val value = root.opt(names.next())) {
+                is JSONObject -> findArrayOrNull(value, keys)?.let { return it }
+                is JSONArray -> {
+                    for (i in 0 until value.length()) {
+                        val child = value.optJSONObject(i) ?: continue
+                        findArrayOrNull(child, keys)?.let { return it }
+                    }
+                }
+            }
         }
         return null
     }
@@ -426,6 +495,12 @@ class GoldFundAutoDataActivity : Activity() {
                 put("tradeValueToman", q.tradeValueToman ?: JSONObject.NULL)
                 put("netRealFlowToman", q.netRealFlowToman ?: JSONObject.NULL)
                 put("spreadPercent", q.spreadPercent ?: JSONObject.NULL)
+                put("return5", q.return5 ?: JSONObject.NULL)
+                put("return15", q.return15 ?: JSONObject.NULL)
+                put("return30", q.return30 ?: JSONObject.NULL)
+                put("premiumPercentile60", q.premiumPercentile60 ?: JSONObject.NULL)
+                put("pairedHistoryCount", q.pairedHistoryCount)
+                put("historyStatus", q.historyStatus)
             })
         }
         cachePrefs.edit().putString("last_quotes", array.toString())
@@ -442,7 +517,9 @@ class GoldFundAutoDataActivity : Activity() {
                     if (o.isNull(key)) null else o.optDouble(key).takeIf { it.isFinite() }
                 Quote(o.optString("symbol"), o.optString("name"), o.optString("insCode"),
                     o.optString("date"), n("marketPriceToman"), n("navToman"),
-                    n("tradeValueToman"), n("netRealFlowToman"), n("spreadPercent"))
+                    n("tradeValueToman"), n("netRealFlowToman"), n("spreadPercent"),
+                    n("return5"), n("return15"), n("return30"), n("premiumPercentile60"),
+                    o.optInt("pairedHistoryCount", 0), o.optString("historyStatus", "وضعیت تاریخچه نامشخص"))
             }
         } catch (_: Exception) { emptyList() }
     }
@@ -487,16 +564,15 @@ class GoldFundAutoDataActivity : Activity() {
         card.addView(text("ارزش معاملات روز: ${money(q.tradeValueToman)} تومان", 12, false))
         card.addView(text("خالص خرید حقیقی: ${money(q.netRealFlowToman)} تومان (خرید حقیقی منهای فروش حقیقی)", 12, false))
         card.addView(text("اختلاف بهترین خرید و فروش: ${fmtOrMissing(q.spreadPercent)}٪", 12, false))
-        val historyStore = GoldFundHistoryStore(this)
-        val pairedCount = historyStore.pairedObservationCount(q.insCode)
-        val percentile = historyStore.percentile60(q.insCode)
         card.addView(text(
-            if (percentile != null) {
-                "تاریخچه جفت‌شده: $pairedCount روز معاملاتی | درصدک حباب ۶۰روزه: ${fmt(percentile)}٪"
-            } else {
-                "تاریخچه جفت‌شده قیمت و NAV: $pairedCount روز از ۶۰ روز لازم | درصدک: هنوز قابل محاسبه نیست"
-            }, 12, true
+            "بازده NAV در ۵/۱۵/۳۰ روز معاملاتی: ${fmtOrMissing(q.return5)}٪ / ${fmtOrMissing(q.return15)}٪ / ${fmtOrMissing(q.return30)}٪",
+            12, true
         ))
+        card.addView(text(
+            "درصدک حباب ۶۰روزه: ${fmtOrMissing(q.premiumPercentile60)}٪ | تاریخچه جفت‌شده: ${q.pairedHistoryCount} روز",
+            12, true
+        ))
+        card.addView(text("وضعیت تاریخچه: ${q.historyStatus}", 11, false))
         card.addView(text("توجه: خالص خرید حقیقی، اختلاف ارزش خرید و فروش حقیقی در معاملات ثانویه است و معادل ورود/خروج وجه نقد از صندوق از محل صدور و ابطال واحدها نیست.", 11, false))
         results.addView(card, matchWrap())
     }
