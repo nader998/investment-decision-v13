@@ -11,6 +11,10 @@
         android:theme="@style/AppTheme">
 
         <activity
+            android:name=".GoldFundAutoDataActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".GoldFundStrategyActivity"
             android:exported="false" />
 
