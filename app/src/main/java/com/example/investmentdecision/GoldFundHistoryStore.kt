@@ -81,6 +81,26 @@ class GoldFundHistoryStore(context: Context) :
         }
     }
 
+    fun navReturnPercent(insCode: String, tradingDays: Int): Double? {
+        if (tradingDays <= 0) return null
+        val values = mutableListOf<Double>()
+        readableDatabase.rawQuery(
+            """
+            SELECT nav_toman FROM daily_history
+            WHERE ins_code = ? AND nav_toman > 0
+            ORDER BY trade_date DESC LIMIT ?
+            """.trimIndent(),
+            arrayOf(insCode, (tradingDays + 1).toString())
+        ).use { cursor ->
+            while (cursor.moveToNext()) values.add(cursor.getDouble(0))
+        }
+        if (values.size <= tradingDays) return null
+        val latest = values.first()
+        val prior = values[tradingDays]
+        if (prior <= 0.0) return null
+        return (latest / prior - 1.0) * 100.0
+    }
+
     fun percentile60(insCode: String): Double? {
         val points = latestPremiums(insCode, 60)
         if (points.size < 60) return null
