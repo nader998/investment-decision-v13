@@ -33,7 +33,8 @@ class GoldFundStrategyActivity : Activity() {
         val premiumPercentile: Double,
         val volume: Double,
         val spread: Double,
-        val flowPct: Double
+        val flowPct: Double,
+        val dataComplete: Boolean
     ) {
         val premium: Double get() = (price / nav - 1.0) * 100.0
         val mediumReturn: Double get() = (r15 + r30) / 2.0
@@ -358,13 +359,32 @@ class GoldFundStrategyActivity : Activity() {
 
         val price = requiredNumber(priceInput, "قیمت بازار") ?: return
         val nav = requiredNumber(navInput, "NAV") ?: return
-        val r5 = requiredNumber(r5Input, "بازده ۵ روزه") ?: return
-        val r15 = requiredNumber(r15Input, "بازده ۱۵ روزه") ?: return
-        val r30 = requiredNumber(r30Input, "بازده ۳۰ روزه") ?: return
-        val percentile = requiredNumber(premiumPercentileInput, "درصدک حباب ۶۰ روزه") ?: return
-        val volume = requiredNumber(volumeInput, "ارزش معاملات روزانه") ?: return
-        val spread = requiredNumber(spreadInput, "اختلاف قیمت خرید و فروش") ?: return
-        val flow = requiredNumber(flowInput, "خالص ورود پول") ?: return
+        fun optionalNumber(field: EditText, title: String): Double? {
+            if (field.text.toString().isBlank()) return null
+            val value = number(field)
+            if (value == null) {
+                showValidationError("$title نامعتبر است؛ فقط عدد وارد کن یا فیلد را خالی بگذار.")
+                field.requestFocus()
+            }
+            return value
+        }
+
+        val r5 = optionalNumber(r5Input, "بازده ۵ روزه") ?: 0.0
+        if (r5Input.text.isNotBlank() && number(r5Input) == null) return
+        val r15 = optionalNumber(r15Input, "بازده ۱۵ روزه") ?: 0.0
+        if (r15Input.text.isNotBlank() && number(r15Input) == null) return
+        val r30 = optionalNumber(r30Input, "بازده ۳۰ روزه") ?: 0.0
+        if (r30Input.text.isNotBlank() && number(r30Input) == null) return
+        val percentile = optionalNumber(premiumPercentileInput, "درصدک حباب ۶۰ روزه") ?: 50.0
+        if (premiumPercentileInput.text.isNotBlank() && number(premiumPercentileInput) == null) return
+        val volume = optionalNumber(volumeInput, "ارزش معاملات روزانه") ?: 0.0
+        if (volumeInput.text.isNotBlank() && number(volumeInput) == null) return
+        val spread = optionalNumber(spreadInput, "اختلاف قیمت خرید و فروش") ?: 0.0
+        if (spreadInput.text.isNotBlank() && number(spreadInput) == null) return
+        val flow = optionalNumber(flowInput, "خالص ورود پول") ?: 0.0
+        if (flowInput.text.isNotBlank() && number(flowInput) == null) return
+        val dataComplete = listOf(r5Input, r15Input, r30Input, premiumPercentileInput,
+            volumeInput, spreadInput, flowInput).all { it.text.toString().isNotBlank() }
 
         if (price <= 0.0) {
             showValidationError("قیمت بازار باید بزرگ‌تر از صفر باشد.")
@@ -403,7 +423,8 @@ class GoldFundStrategyActivity : Activity() {
             premiumPercentile = percentile,
             volume = volume,
             spread = spread,
-            flowPct = flow
+            flowPct = flow,
+            dataComplete = dataComplete
         )
 
         val existingIndex = funds.indexOfFirst {
@@ -480,6 +501,7 @@ class GoldFundStrategyActivity : Activity() {
                 momentumScore + liquidityScore + flowScore
 
             val action = when {
+                !f.dataComplete -> "داده ناقص؛ بدون سیگنال خرید/فروش"
                 f.premiumPercentile <= 25.0 &&
                     total >= 80.0 &&
                     (momentumRanks[f.name] ?: 0.0) >= 50.0 &&
@@ -645,6 +667,7 @@ class GoldFundStrategyActivity : Activity() {
                 put("volume", f.volume)
                 put("spread", f.spread)
                 put("flowPct", f.flowPct)
+                put("dataComplete", f.dataComplete)
             })
         }
         prefs.edit().putString("funds", array.toString()).apply()
@@ -668,7 +691,8 @@ class GoldFundStrategyActivity : Activity() {
                     o.getDouble("premiumPercentile"),
                     o.getDouble("volume"),
                     o.getDouble("spread"),
-                    o.getDouble("flowPct")
+                    o.getDouble("flowPct"),
+                    o.optBoolean("dataComplete", true)
                 ))
             }
         } catch (_: Exception) {
