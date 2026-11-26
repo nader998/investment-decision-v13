@@ -1,0 +1,21 @@
+name: Probe Bourseeye gold fund history
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'tools/probe_bourseeye.py'
+      - '.github/workflows/probe-bourseeye.yml'
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install parser
+        run: pip install requests beautifulsoup4
+      - name: Probe listing and history pages
+        run: python tools/probe_bourseeye.py
