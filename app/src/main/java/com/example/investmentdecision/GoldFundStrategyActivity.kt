@@ -145,7 +145,7 @@ class GoldFundStrategyActivity : Activity() {
         val importCard = card()
         importCard.addView(label("ورود اطلاعات دریافت‌شده به محاسبه‌گر", 17, true))
         importCard.addView(label(
-            "پس از دریافت اطلاعات در صفحه قبل، صندوق را از فهرست زیر انتخاب کن. قیمت، NAV، ارزش معاملات، اسپرد و در صورت وجود درصدک ۶۰روزه وارد می‌شوند. بازده NAV و جریان واقعی صدور/ابطال خودکار در دسترس نیستند و نباید با خالص خرید حقیقی جایگزین شوند.",
+            "پس از دریافت اطلاعات، صندوق را انتخاب کن. قیمت، NAV، ارزش معاملات، اسپرد، بازده NAV در ۵/۱۵/۳۰ روز و در صورت تکمیل تاریخچه درصدک ۶۰روزه وارد می‌شوند. جریان واقعی صدور/ابطال از این API قابل تأیید نیست و جداگانه باید وارد شود.",
             12, false
         ))
         autoImportArea = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -257,14 +257,22 @@ class GoldFundStrategyActivity : Activity() {
                         navInput.setText(if (nav.isFinite() && nav > 0.0) nav.toString() else "")
                         volumeInput.setText(if (volume.isFinite() && volume >= 0.0) volume.toString() else "")
                         spreadInput.setText(if (spread.isFinite() && spread >= 0.0) spread.toString() else "")
-                        premiumPercentileInput.setText(percentile?.toString() ?: "")
-                        r5Input.text.clear()
-                        r15Input.text.clear()
-                        r30Input.text.clear()
+                        val r5 = item.optDouble("return5", Double.NaN)
+                        val r15 = item.optDouble("return15", Double.NaN)
+                        val r30 = item.optDouble("return30", Double.NaN)
+                        val cachedPercentile = item.optDouble("premiumPercentile60", Double.NaN)
+                        premiumPercentileInput.setText(
+                            if (cachedPercentile.isFinite()) cachedPercentile.toString()
+                            else percentile?.toString() ?: ""
+                        )
+                        r5Input.setText(if (r5.isFinite()) r5.toString() else "")
+                        r15Input.setText(if (r15.isFinite()) r15.toString() else "")
+                        r30Input.setText(if (r30.isFinite()) r30.toString() else "")
+                        // Real subscription/redemption cash flow is not supplied by these TSETMC endpoints.
                         flowInput.text.clear()
                         Toast.makeText(
                             this@GoldFundStrategyActivity,
-                            "داده‌های موجود وارد شد؛ بازده‌ها و جریان واقعی صدور/ابطال را فقط با منبع معتبر تکمیل کن.",
+                            "قیمت، NAV و بازده‌های قابل‌محاسبه وارد شد؛ جریان واقعی صدور/ابطال همچنان نیازمند منبع جداگانه است.",
                             Toast.LENGTH_LONG
                         ).show()
                     }
