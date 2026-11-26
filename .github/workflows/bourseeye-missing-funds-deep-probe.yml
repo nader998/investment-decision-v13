@@ -1,0 +1,104 @@
+name: Bourseeye Missing Funds Deep Probe
+
+on:
+  push:
+    branches:
+      - test/bourseeye-http-probe
+    paths:
+      - .github/workflows/bourseeye-missing-funds-deep-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Probe history routes, page data and embedded endpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p deep-probe
+          python3 - <<'PY'
+          import csv, re, json
+          from urllib.request import Request, urlopen
+          from urllib.error import HTTPError, URLError
+          from urllib.parse import urljoin, quote
+          from html.parser import HTMLParser
+
+          BASE = "https://bourseeye.com"
+          FUNDS = [
+            ("1220","صندوق طلای زریران داریوش","/funds/1220/صندوق-طلای-زریران-داریوش"),
+            ("1301","صندوق طلای دفینه سینا","/funds/1301/صندوق-طلای-دفینه-سینا"),
+            ("1394","صندوق طلای قلک گلد","/funds/1394/صندوق-طلای-قلک-گلد"),
+            ("1425","صندوق طلای مهرگلد مهرگان","/funds/1425/صندوق-طلای-مهرگلد-مهرگان"),
+          ]
+          H={"User-Agent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/126 Safari/537.36","Accept":"text/html,application/xhtml+xml"}
+          def get(u):
+            try:
+              req=Request(u,headers=H)
+              with urlopen(req,timeout=40) as r:
+                b=r.read().decode("utf-8","replace")
+                return r.status,r.geturl(),b,""
+            except HTTPError as e:
+              return e.code,e.geturl(),e.read().decode("utf-8","replace")[:1000],"HTTPError"
+            except Exception as e:
+              return 0,u,"",str(e)[:300]
+          class Parser(HTMLParser):
+            def __init__(self):
+              super().__init__(); self.href=[]; self.scripts=[]; self.text=[]
+            def handle_starttag(self,t,a):
+              d=dict(a)
+              if t=="a" and d.get("href"): self.href.append(d["href"])
+              if t=="script": self.scripts.append(d.get("src","") or "")
+            def handle_data(self,d):
+              if d.strip(): self.text.append(d.strip())
+          rows=[]
+          for fid,name,path in FUNDS:
+            detail=BASE+path
+            ds,du,dh,de=get(detail)
+            p=Parser(); p.feed(dh)
+            # Check likely history routes and route spellings independently.
+            variants=[
+              ("canonical_history",detail.rstrip("/")+"/history"),
+              ("canonical_history_slash",detail.rstrip("/")+"/history/"),
+              ("numeric_history",BASE+"/funds/"+fid+"/history"),
+              ("numeric_history_slash",BASE+"/funds/"+fid+"/history/"),
+              ("history_query",detail+"?tab=history"),
+            ]
+            for label,u in variants:
+              st,final,body,err=get(u)
+              pp=Parser(); pp.feed(body)
+              rows.append({"id":fid,"name":name,"test":label,"http":st,"final_url":final,"bytes":len(body),"has_table":("<table" in body.lower()),"has_history_words":("تاریخچه" in body or "سابقه" in body),"error":err})
+              if st==200 and ("<table" in body.lower() or "تاریخچه" in body):
+                open(f"deep-probe/{fid}-{label}.html","w",encoding="utf-8").write(body)
+            # Record source references, script URLs, and text markers from detail page.
+            open(f"deep-probe/{fid}-detail.html","w",encoding="utf-8").write(dh)
+            for s in p.scripts:
+              if s: rows.append({"id":fid,"name":name,"test":"script","http":"","final_url":urljoin(detail,s),"bytes":"","has_table":"","has_history_words":"","error":""})
+            txt=" ".join(p.text)
+            for term in ("خالص صدور و ابطال","یک ماه","سه ماه","واحدهای صادرشده","NAV ابطال"):
+              pos=txt.find(term)
+              if pos>=0:
+                rows.append({"id":fid,"name":name,"test":"text:"+term,"http":"","final_url":"","bytes":"","has_table":"","has_history_words":"","error":txt[max(0,pos-100):pos+350]})
+            # Internal links that may point to alternate historical routes.
+            for h in p.href:
+              if any(k in h.lower() for k in ("history","nav","chart","fund")):
+                rows.append({"id":fid,"name":name,"test":"internal_link","http":"","final_url":urljoin(detail,h),"bytes":"","has_table":"","has_history_words":"","error":""})
+          with open("deep-probe/results.csv","w",newline="",encoding="utf-8-sig") as f:
+            w=csv.DictWriter(f,fieldnames=["id","name","test","http","final_url","bytes","has_table","has_history_words","error"])
+            w.writeheader(); w.writerows(rows)
+          print("Deep probe completed.")
+          for r in rows:
+            if r["test"].startswith("canonical") or r["test"].startswith("numeric"):
+              print(r)
+          PY
+      - name: Upload deep probe evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bourseeye-missing-funds-deep-probe
+          path: deep-probe/
+          retention-days: 14
