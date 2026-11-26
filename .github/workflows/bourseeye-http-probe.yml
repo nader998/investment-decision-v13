@@ -48,6 +48,12 @@ jobs:
                       if re.match(r"^/funds/\d+/",h) and not h.endswith("/history"):
                           self.hrefs.append(h.split("?")[0].rstrip("/"))
 
+          class PlainText(HTMLParser):
+              def __init__(self):
+                  super().__init__(); self.parts=[]
+              def handle_data(self, data):
+                  if data.strip(): self.parts.append(data.strip())
+
           class TableRows(HTMLParser):
               def __init__(self):
                   super().__init__(); self.rows=[]; self.row=None; self.cell=None; self.in_table=False
@@ -82,11 +88,11 @@ jobs:
           def check(path):
               name_url=BASE+path
               hist_url=name_url+"/history"
-              result={"path":path,"history_http":0,"rows":0,"valid_nav":0,"valid_close_nav":0,"has_adjusted_nav":False,"history_ok":False,"detail_http":0,"flow_marker":False,"error":""}
+              result={"path":path,"history_http":0,"rows":0,"valid_nav":0,"valid_close_nav":0,"has_adjusted_nav":False,"history_ok":False,"detail_http":0,"flow_marker":False,"flow_text_excerpt":"","error":""}
+              # History and detail are tested independently.
               try:
                   hs, hu, html=get(hist_url)
                   result["history_http"]=hs
-                  if hs!=200: raise RuntimeError(f"history HTTP {hs}")
                   parser=TableRows(); parser.feed(html)
                   rows=parser.rows
                   result["rows"]=max(0,len(rows)-1)
@@ -100,12 +106,25 @@ jobs:
                           close=bool(re.search(r"\d",cells[4]))
                           if nav: result["valid_nav"]+=1
                           if nav and close: result["valid_close_nav"]+=1
-                  result["history_ok"]=(result["rows"]>=60 and result["valid_nav"]>=60 and result["valid_close_nav"]>=30 and result["has_adjusted_nav"])
+                  # Require at least 60 genuinely paired close/NAV observations.
+                  result["history_ok"]=(hs==200 and result["rows"]>=60 and result["valid_nav"]>=60 and result["valid_close_nav"]>=60 and result["has_adjusted_nav"])
+              except Exception as e:
+                  result["error"]="history: "+str(e)[:220]
+              try:
                   ds, du, detail=get(name_url)
                   result["detail_http"]=ds
-                  result["flow_marker"]=("صدور" in detail and "ابطال" in detail and ("خالص" in detail or "ورود پول" in detail))
+                  plain=PlainText(); plain.feed(detail)
+                  txt=" ".join(plain.parts)
+                  result["flow_marker"]=("صدور" in txt and "ابطال" in txt and ("خالص" in txt or "ورود پول" in txt))
+                  excerpts=[]
+                  for term in ("خالص صدور","صدور و ابطال","ورود پول","ابطال"):
+                      pos=txt.find(term)
+                      if pos>=0:
+                          excerpts.append(txt[max(0,pos-100):min(len(txt),pos+260)])
+                  result["flow_text_excerpt"]=" || ".join(excerpts[:4])[:1400]
               except Exception as e:
-                  result["error"]=str(e)[:300]
+                  msg="detail: "+str(e)[:180]
+                  result["error"]=(result["error"]+"; "+msg).strip("; ")
               return result
 
           results=[]
@@ -125,7 +144,8 @@ jobs:
             f"Detail pages HTTP 200: {sum(x['detail_http']==200 for x in results)}",
             f"Detail pages with issuance/redemption flow markers: {flows}",
             "",
-            "Per-fund results are in funds.csv. A flow marker means the page contains relevant terms; it does NOT prove a numeric daily flow value was parsed.",
+            "Validation now requires at least 60 paired closing-price/NAV rows.",
+            "flow_text_excerpt in funds.csv shows text around flow-related terms; it is not proof of daily numeric flow availability.",
           ]
           open("probe-output/summary.txt","w",encoding="utf-8").write("\n".join(summary))
           print("\n".join(summary))
