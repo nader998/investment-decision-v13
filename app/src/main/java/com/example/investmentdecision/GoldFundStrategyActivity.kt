@@ -472,17 +472,29 @@ class GoldFundStrategyActivity : Activity() {
             return
         }
 
+        val eligibleFunds = funds.filter { it.dataComplete }
+        if (eligibleFunds.isEmpty()) {
+            resultArea.addView(card().apply {
+                addView(label("فعلاً هیچ صندوقی داده کامل ندارد؛ رتبه‌بندی و سیگنال صادر نشد.", 15, true))
+                addView(label(
+                    "برای تحلیل معتبر، بازده‌های NAV، درصدک ۶۰روزه، ارزش معاملات، اسپرد و جریان پول باید با داده واقعی تکمیل شوند. خانه‌های خالی را صفر یا مقدار فرضی تلقی نکن.",
+                    12, false
+                ))
+            }, matchWrap())
+            return
+        }
+
         val performanceRanks = rankScores(
-            funds.associate { it.name to it.mediumReturn }, true
+            eligibleFunds.associate { it.name to it.mediumReturn }, true
         )
         val momentumRanks = rankScores(
-            funds.associate { it.name to it.r5 }, true
+            eligibleFunds.associate { it.name to it.r5 }, true
         )
-        val volumeRanks = rankScores(funds.associate { it.name to it.volume }, true)
-        val spreadRanks = rankScores(funds.associate { it.name to it.spread }, false)
-        val flowRanks = rankScores(funds.associate { it.name to it.flowPct }, true)
+        val volumeRanks = rankScores(eligibleFunds.associate { it.name to it.volume }, true)
+        val spreadRanks = rankScores(eligibleFunds.associate { it.name to it.spread }, false)
+        val flowRanks = rankScores(eligibleFunds.associate { it.name to it.flowPct }, true)
 
-        val scored = funds.map { f ->
+        val scored = eligibleFunds.map { f ->
             val premiumScore = when {
                 f.premiumPercentile <= 10.0 -> 30.0
                 f.premiumPercentile <= 25.0 -> 24.0
@@ -632,7 +644,11 @@ class GoldFundStrategyActivity : Activity() {
             }
 
             row.addView(label(
-                "${fund.name} | ${fund.asOf} | حباب ${fmt(fund.premium)}٪ | درصدک ${fmt(fund.premiumPercentile)}",
+                if (fund.dataComplete) {
+                    "${fund.name} | ${fund.asOf} | حباب ${fmt(fund.premium)}٪ | درصدک ${fmt(fund.premiumPercentile)}"
+                } else {
+                    "${fund.name} | ${fund.asOf} | داده ناقص؛ فعلاً بدون رتبه و سیگنال"
+                },
                 12, true
             ), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
