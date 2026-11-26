@@ -1,0 +1,90 @@
+name: Bourseeye Missing History Routes Diagnostic
+
+on:
+  push:
+    branches:
+      - test/bourseeye-http-probe
+    paths:
+      - .github/workflows/bourseeye-missing-history.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Probe alternate history URLs and numeric flow fields
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p diagnostic
+          python3 - <<'PY'
+          import csv, re
+          from urllib.request import Request, urlopen
+          from urllib.error import HTTPError, URLError
+          from html.parser import HTMLParser
+          from urllib.parse import quote
+
+          BASE = "https://bourseeye.com"
+          targets = [
+              (1220, "صندوق طلای زریران داریوش"),
+              (1301, "صندوق طلای دافینه سینا"),
+              (1394, "صندوق طلای قلک گلد"),
+              (1425, "صندوق طلای مهرگلد مهرگان"),
+          ]
+          headers = {"User-Agent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36"}
+
+          def get(url):
+              try:
+                  req=Request(url,headers=headers)
+                  with urlopen(req,timeout=35) as r:
+                      return r.status,r.geturl(),r.read().decode("utf-8","replace")
+              except HTTPError as e:
+                  return e.code,e.geturl(),e.read().decode("utf-8","replace")
+              except Exception as e:
+                  return 0,url,str(e)
+
+          class Text(HTMLParser):
+              def __init__(self):
+                  super().__init__(); self.parts=[]
+              def handle_data(self,d):
+                  if d.strip(): self.parts.append(d.strip())
+
+          out=[]
+          for fid,name in targets:
+              urls=[
+                  f"{BASE}/funds/{fid}/history",
+                  f"{BASE}/funds/{fid}/history/",
+              ]
+              row={"id":fid,"name":name}
+              for i,u in enumerate(urls,1):
+                  st,final,body=get(u)
+                  row[f"variant{i}_http"]=st
+                  row[f"variant{i}_url"]=final
+                  row[f"variant{i}_title"]=re.sub(r"\\s+"," ",(re.search(r"<title[^>]*>(.*?)</title>",body,re.I|re.S) or [None,""])[1])[:160]
+              # Test detail page separately and capture only the first exact flow labels with values.
+              st,final,body=get(f"{BASE}/funds/{fid}")
+              parser=Text(); parser.feed(body); txt=" ".join(parser.parts)
+              row["detail_http"]=st
+              row["detail_url"]=final
+              row["fund_name_visible"]=name.split()[-1] in txt
+              matches=re.findall(r"خالص صدور و ابطال\\s*(?:یک ماه|سه ماه)\\s*[^|]{0,90}",txt)
+              row["numeric_flow_excerpt"]=" | ".join(matches[:4])
+              row["has_numeric_flow"]=bool(matches and re.search(r"[۰-۹0-9]", " ".join(matches)))
+              out.append(row)
+              print(row)
+
+          with open("diagnostic/missing-history.csv","w",newline="",encoding="utf-8-sig") as f:
+              w=csv.DictWriter(f,fieldnames=list(out[0].keys())); w.writeheader(); w.writerows(out)
+          print("DIAGNOSTIC_DONE")
+          PY
+      - name: Upload diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bourseeye-missing-history-diagnostic
+          path: diagnostic/
+          retention-days: 14
