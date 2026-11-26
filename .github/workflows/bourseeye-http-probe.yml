@@ -63,4 +63,5 @@ jobs:
             probe-report.txt
             fetch-metadata.txt
             response-headers.txt
+            response.html
           retention-days: 14
