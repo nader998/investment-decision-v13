@@ -383,8 +383,10 @@ class GoldFundStrategyActivity : Activity() {
         if (spreadInput.text.isNotBlank() && number(spreadInput) == null) return
         val flow = optionalNumber(flowInput, "خالص ورود پول") ?: 0.0
         if (flowInput.text.isNotBlank() && number(flowInput) == null) return
+        // Subscription/redemption flow is not available from the current verified source.
+        // Do not make it mandatory; all six measurable strategy inputs below are required.
         val dataComplete = listOf(r5Input, r15Input, r30Input, premiumPercentileInput,
-            volumeInput, spreadInput, flowInput).all { it.text.toString().isNotBlank() }
+            volumeInput, spreadInput).all { it.text.toString().isNotBlank() }
 
         if (price <= 0.0) {
             showValidationError("قیمت بازار باید بزرگ‌تر از صفر باشد.")
@@ -477,7 +479,7 @@ class GoldFundStrategyActivity : Activity() {
             resultArea.addView(card().apply {
                 addView(label("فعلاً هیچ صندوقی داده کامل ندارد؛ رتبه‌بندی و سیگنال صادر نشد.", 15, true))
                 addView(label(
-                    "برای تحلیل معتبر، بازده‌های NAV، درصدک ۶۰روزه، ارزش معاملات، اسپرد و جریان پول باید با داده واقعی تکمیل شوند. خانه‌های خالی را صفر یا مقدار فرضی تلقی نکن.",
+                    "برای تحلیل، بازده‌های NAV، درصدک ۶۰روزه، ارزش معاملات و اسپرد باید با داده واقعی تکمیل شوند. جریان واقعی صدور/ابطال هنوز منبع تأییدشده ندارد و در شرط تکمیل داده و امتیازدهی لحاظ نمی‌شود. خانه‌های خالی را صفر یا مقدار فرضی تلقی نکن.",
                     12, false
                 ))
             }, matchWrap())
@@ -492,7 +494,8 @@ class GoldFundStrategyActivity : Activity() {
         )
         val volumeRanks = rankScores(eligibleFunds.associate { it.name to it.volume }, true)
         val spreadRanks = rankScores(eligibleFunds.associate { it.name to it.spread }, false)
-        val flowRanks = rankScores(eligibleFunds.associate { it.name to it.flowPct }, true)
+        // Subscription/redemption cash flow is intentionally excluded until a verified
+        // per-fund daily numeric source is integrated. TSETMC retail flow is a different metric.
 
         val scored = eligibleFunds.map { f ->
             val premiumScore = when {
@@ -508,9 +511,10 @@ class GoldFundStrategyActivity : Activity() {
             val liquidityScore =
                 ((volumeRanks[f.name] ?: 0.0) * 0.5 +
                     (spreadRanks[f.name] ?: 0.0) * 0.5) * 0.15
-            val flowScore = (flowRanks[f.name] ?: 0.0) * 0.10
-            val total = premiumScore + performanceScore +
-                momentumScore + liquidityScore + flowScore
+            // Available-factor score is normalized to 100; no synthetic zero is assigned to missing flow.
+            val flowScore = 0.0
+            val total = (premiumScore + performanceScore +
+                momentumScore + liquidityScore) * (100.0 / 90.0)
 
             val action = when {
                 !f.dataComplete -> "داده ناقص؛ بدون سیگنال خرید/فروش"
@@ -542,7 +546,7 @@ class GoldFundStrategyActivity : Activity() {
             12, false
         ))
         explanation.addView(label(
-            "امتیاز کل = حباب تاریخی ۳۰ + بازده نسبی ۱۵/۳۰ روزه ۲۵ + مومنتوم ۵ روزه ۲۰ + نقدشوندگی ۱۵ + جریان پول ۱۰.",
+            "امتیاز کل از حباب تاریخی، بازده ۱۵/۳۰روزه، مومنتوم ۵روزه و نقدشوندگی محاسبه و به مقیاس ۱۰۰ تبدیل می‌شود. جریان واقعی صدور/ابطال فعلاً در امتیاز وارد نشده است.",
             12, false
         ))
         explanation.addView(label(
