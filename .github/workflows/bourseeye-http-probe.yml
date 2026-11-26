@@ -1,4 +1,4 @@
-name: Bourseeye HTTP Probe
+name: Bourseeye All Gold Funds Probe
 
 on:
   push:
@@ -12,56 +12,134 @@ permissions:
   contents: read
 
 jobs:
-  probe:
+  probe-all-funds:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - name: Fetch Bourseeye gold-fund history page
-        id: fetch
+      - name: Fetch and validate all gold fund histories
         shell: bash
         run: |
           set -euo pipefail
-          URL='https://bourseeye.com/funds/1521/%D8%B5%D9%86%D8%AF%D9%88%D9%82-%D8%B7%D9%84%D8%A7%DB%8C-%D8%B9%DB%8C%D8%A7%D8%B1/history'
-          curl --location --silent --show-error --max-time 45 \
-            --user-agent 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36' \
-            --dump-header response-headers.txt --output response.html \
-            --write-out 'HTTP_STATUS=%{http_code}\nCONTENT_TYPE=%{content_type}\nSIZE_DOWNLOAD=%{size_download}\n' "$URL" | tee fetch-metadata.txt
+          mkdir -p probe-output
           python3 - <<'PY'
-          from pathlib import Path
-          import re, sys
-          html = Path("response.html").read_text(encoding="utf-8", errors="replace")
-          headers = Path("response-headers.txt").read_text(errors="replace")
-          status = re.findall(r"HTTP_STATUS=(\d+)", Path("fetch-metadata.txt").read_text())
-          status = int(status[-1]) if status else 0
-          rows = len(re.findall(r"<tr\b", html, flags=re.I))
-          has_date = "تاریخ" in html
-          has_nav = ("NAV ابطال" in html) or ("nav" in html.lower())
-          has_close = ("قیمت پایانی" in html) or ("قیمت" in html)
-          blocked = any(x in html.lower() for x in ["just a moment", "access denied", "cloudflare", "captcha"])
-          report = [
-            f"HTTP status: {status}",
-            f"HTML characters: {len(html)}",
-            f"Table row tags: {rows}",
-            f"Persian date header present: {has_date}",
-            f"NAV marker present: {has_nav}",
-            f"Price marker present: {has_close}",
-            f"Possible anti-bot/block page: {blocked}",
-            f"Response headers (first 20 lines):\n" + "\n".join(headers.splitlines()[:20]),
+          import csv, re, sys, time
+          from concurrent.futures import ThreadPoolExecutor, as_completed
+          from html.parser import HTMLParser
+          from urllib.parse import urljoin
+          from urllib.request import Request, urlopen
+
+          BASE = "https://bourseeye.com"
+          LIST_URL = BASE + "/funds/gold"
+          HEADERS = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36"}
+
+          def get(url):
+              req = Request(url, headers=HEADERS)
+              with urlopen(req, timeout=45) as r:
+                  body = r.read().decode("utf-8", "replace")
+                  return r.status, r.geturl(), body
+
+          class Links(HTMLParser):
+              def __init__(self):
+                  super().__init__(); self.hrefs=[]
+              def handle_starttag(self, tag, attrs):
+                  if tag.lower()=="a":
+                      d=dict(attrs)
+                      h=d.get("href","")
+                      if re.match(r"^/funds/\d+/",h) and not h.endswith("/history"):
+                          self.hrefs.append(h.split("?")[0].rstrip("/"))
+
+          class TableRows(HTMLParser):
+              def __init__(self):
+                  super().__init__(); self.rows=[]; self.row=None; self.cell=None; self.in_table=False
+              def handle_starttag(self, tag, attrs):
+                  t=tag.lower()
+                  if t=="table": self.in_table=True
+                  elif self.in_table and t=="tr": self.row=[]
+                  elif self.in_table and t in ("td","th") and self.row is not None: self.cell=[]
+              def handle_data(self, data):
+                  if self.cell is not None: self.cell.append(data)
+              def handle_endtag(self, tag):
+                  t=tag.lower()
+                  if t in ("td","th") and self.cell is not None and self.row is not None:
+                      self.row.append(" ".join(" ".join(self.cell).split())); self.cell=None
+                  elif t=="tr" and self.row is not None:
+                      self.rows.append(self.row); self.row=None
+                  elif t=="table": self.in_table=False
+
+          def norm(s):
+              trans=str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩٬٫−", "01234567890123456789,.-")
+              return s.translate(trans)
+
+          status, final_url, listing = get(LIST_URL)
+          if status != 200 or len(listing)<10000:
+              raise RuntimeError(f"Gold-fund list failed: HTTP {status}, bytes={len(listing)}")
+          links=Links(); links.feed(listing)
+          paths=sorted(set(links.hrefs))
+          if len(paths)<10:
+              raise RuntimeError(f"Could not discover fund pages from listing; links={len(paths)}")
+          print(f"LIST_HTTP={status}; FUND_LINKS={len(paths)}; URL={final_url}")
+
+          def check(path):
+              name_url=BASE+path
+              hist_url=name_url+"/history"
+              result={"path":path,"history_http":0,"rows":0,"valid_nav":0,"valid_close_nav":0,"has_adjusted_nav":False,"history_ok":False,"detail_http":0,"flow_marker":False,"error":""}
+              try:
+                  hs, hu, html=get(hist_url)
+                  result["history_http"]=hs
+                  if hs!=200: raise RuntimeError(f"history HTTP {hs}")
+                  parser=TableRows(); parser.feed(html)
+                  rows=parser.rows
+                  result["rows"]=max(0,len(rows)-1)
+                  header=" ".join(rows[0]) if rows else ""
+                  result["has_adjusted_nav"]=("تعدیل" in header)
+                  # Expected order: date, NAV issue, NAV redemption, adjusted NAV, closing price, bubble
+                  for row in rows[1:]:
+                      cells=[norm(c) for c in row]
+                      if len(cells)>=5:
+                          nav=bool(re.search(r"\d",cells[2]))
+                          close=bool(re.search(r"\d",cells[4]))
+                          if nav: result["valid_nav"]+=1
+                          if nav and close: result["valid_close_nav"]+=1
+                  result["history_ok"]=(result["rows"]>=60 and result["valid_nav"]>=60 and result["valid_close_nav"]>=30 and result["has_adjusted_nav"])
+                  ds, du, detail=get(name_url)
+                  result["detail_http"]=ds
+                  result["flow_marker"]=("صدور" in detail and "ابطال" in detail and ("خالص" in detail or "ورود پول" in detail))
+              except Exception as e:
+                  result["error"]=str(e)[:300]
+              return result
+
+          results=[]
+          with ThreadPoolExecutor(max_workers=6) as pool:
+              futures=[pool.submit(check,p) for p in paths]
+              for f in as_completed(futures):
+                  results.append(f.result())
+          results.sort(key=lambda x:x["path"])
+          with open("probe-output/funds.csv","w",newline="",encoding="utf-8-sig") as f:
+              w=csv.DictWriter(f,fieldnames=list(results[0].keys())); w.writeheader(); w.writerows(results)
+          passed=sum(x["history_ok"] for x in results)
+          flows=sum(x["flow_marker"] and x["detail_http"]==200 for x in results)
+          summary=[
+            f"Fund links discovered: {len(paths)}",
+            f"History pages HTTP 200: {sum(x['history_http']==200 for x in results)}",
+            f"History pages meeting validation: {passed}",
+            f"Detail pages HTTP 200: {sum(x['detail_http']==200 for x in results)}",
+            f"Detail pages with issuance/redemption flow markers: {flows}",
+            "",
+            "Per-fund results are in funds.csv. A flow marker means the page contains relevant terms; it does NOT prove a numeric daily flow value was parsed.",
           ]
-          Path("probe-report.txt").write_text("\n".join(report), encoding="utf-8")
-          print("\n".join(report))
-          if status != 200 or len(html) < 10000 or rows < 60 or not has_date or not has_nav or not has_close or blocked:
-              print("PROBE_RESULT=FAIL")
+          open("probe-output/summary.txt","w",encoding="utf-8").write("\n".join(summary))
+          print("\n".join(summary))
+          for x in results:
+              print(f"{x['path']} | rows={x['rows']} | nav={x['valid_nav']} | paired={x['valid_close_nav']} | history_ok={x['history_ok']} | flow_marker={x['flow_marker']} | error={x['error']}")
+          if passed != len(paths):
+              print("PROBE_RESULT=PARTIAL")
               sys.exit(1)
           print("PROBE_RESULT=PASS")
           PY
-      - name: Upload probe evidence
+      - name: Upload all-funds probe evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: bourseeye-http-probe-report
-          path: |
-            probe-report.txt
-            fetch-metadata.txt
-            response-headers.txt
-            response.html
+          name: bourseeye-all-funds-report
+          path: probe-output/
           retention-days: 14
