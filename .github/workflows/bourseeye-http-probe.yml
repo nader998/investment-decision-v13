@@ -1,0 +1,66 @@
+name: Bourseeye HTTP Probe
+
+on:
+  push:
+    branches:
+      - test/bourseeye-http-probe
+    paths:
+      - .github/workflows/bourseeye-http-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch Bourseeye gold-fund history page
+        id: fetch
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL='https://bourseeye.com/funds/1521/%D8%B5%D9%86%D8%AF%D9%88%D9%82-%D8%B7%D9%84%D8%A7%DB%8C-%D8%B9%DB%8C%D8%A7%D8%B1/history'
+          curl --location --silent --show-error --max-time 45 \
+            --user-agent 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36' \
+            --dump-header response-headers.txt --output response.html \
+            --write-out 'HTTP_STATUS=%{http_code}\nCONTENT_TYPE=%{content_type}\nSIZE_DOWNLOAD=%{size_download}\n' "$URL" | tee fetch-metadata.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          import re, sys
+          html = Path("response.html").read_text(encoding="utf-8", errors="replace")
+          headers = Path("response-headers.txt").read_text(errors="replace")
+          status = re.findall(r"HTTP_STATUS=(\d+)", Path("fetch-metadata.txt").read_text())
+          status = int(status[-1]) if status else 0
+          rows = len(re.findall(r"<tr\\b", html, flags=re.I))
+          has_date = "تاریخ" in html
+          has_nav = ("NAV ابطال" in html) or ("nav" in html.lower())
+          has_close = ("قیمت پایانی" in html) or ("قیمت" in html)
+          blocked = any(x in html.lower() for x in ["just a moment", "access denied", "cloudflare", "captcha"])
+          report = [
+            f"HTTP status: {status}",
+            f"HTML characters: {len(html)}",
+            f"Table row tags: {rows}",
+            f"Persian date header present: {has_date}",
+            f"NAV marker present: {has_nav}",
+            f"Price marker present: {has_close}",
+            f"Possible anti-bot/block page: {blocked}",
+            f"Response headers (first 20 lines):\n" + "\n".join(headers.splitlines()[:20]),
+          ]
+          Path("probe-report.txt").write_text("\n".join(report), encoding="utf-8")
+          print("\n".join(report))
+          if status != 200 or len(html) < 10000 or rows < 60 or not has_date or not has_nav or not has_close or blocked:
+              print("PROBE_RESULT=FAIL")
+              sys.exit(1)
+          print("PROBE_RESULT=PASS")
+          PY
+      - name: Upload probe evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bourseeye-http-probe-report
+          path: |
+            probe-report.txt
+            fetch-metadata.txt
+            response-headers.txt
+          retention-days: 14
