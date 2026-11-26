@@ -150,7 +150,7 @@ class GoldFundAutoDataActivity : Activity() {
                 // Limit parallel requests to avoid overloading the public market-data endpoint.
                 val pool = Executors.newFixedThreadPool(4)
                 val quotes = try {
-                    val tasks = candidates.take(100).map { item ->
+                    val tasks = candidates.map { item ->
                         Callable {
                             try {
                                 fetchQuote(item.first, item.second, item.third)
@@ -176,10 +176,35 @@ class GoldFundAutoDataActivity : Activity() {
                             }
                         }
                     }
-                    pool.invokeAll(tasks, 55, TimeUnit.SECONDS)
-                        .mapNotNull { future ->
-                            try { if (future.isDone && !future.isCancelled) future.get() else null }
-                            catch (_: Exception) { null }
+                    // Do not apply a global timeout that silently drops slow funds.
+                    // Each HTTP request already has connect/read timeouts; each task
+                    // returns a placeholder Quote if its own fetch fails.
+                    pool.invokeAll(tasks)
+                        .map { future ->
+                            try {
+                                future.get()
+                            } catch (e: Exception) {
+                                // Defensive fallback: preserve the corresponding fund row.
+                                val index = tasks.indexOf(future)
+                                val item = candidates[index]
+                                Quote(
+                                    symbol = item.first,
+                                    name = item.second,
+                                    insCode = item.third,
+                                    date = "داده پیدا نشد",
+                                    marketPriceToman = null,
+                                    navToman = null,
+                                    tradeValueToman = null,
+                                    netRealFlowToman = null,
+                                    spreadPercent = null,
+                                    return5 = null,
+                                    return15 = null,
+                                    return30 = null,
+                                    premiumPercentile60 = null,
+                                    pairedHistoryCount = 0,
+                                    historyStatus = "داده پیدا نشد: خطای پردازش دریافت"
+                                )
+                            }
                         }
                 } finally {
                     pool.shutdownNow()
