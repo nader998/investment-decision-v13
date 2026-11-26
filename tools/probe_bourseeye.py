@@ -17,33 +17,50 @@ def norm(value):
 
 def main():
     response = session.get(BASE + "/funds/gold", timeout=(20, 45))
-    print(f"LIST_HTTP={response.status_code}; FINAL_URL={response.url}; CONTENT_TYPE={response.headers.get('content-type')}; BYTES={len(response.content)}")
+    print(f"LIST_HTTP={response.status_code}; FINAL_URL={response.url}; BYTES={len(response.content)}")
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")
-    print("PAGE_TITLE=" + norm(soup.title.get_text(" ", strip=True) if soup.title else "NO_TITLE"))
-    print("BODY_START=" + norm(soup.get_text(" ", strip=True))[:1200])
+    found = {}
+    for a in soup.select("a[href]"):
+        url = urljoin(BASE, a.get("href", ""))
+        match = re.search(r"/funds/(\\d+)/([^/?#]+)", url)
+        if match:
+            found.setdefault(match.group(1), (match.group(2), norm(a.get_text(" ", strip=True))))
+    print(f"FUND_LINKS={len(found)}")
+    if not found:
+        print("TITLE=" + norm(soup.title.get_text(" ", strip=True) if soup.title else "NO_TITLE"))
+        print("BODY=" + norm(soup.get_text(" ", strip=True))[:1500])
+        raise SystemExit("No fund links in server response")
 
-    hrefs = [urljoin(BASE, a.get("href", "")) for a in soup.select("a[href]")]
-    fund_hrefs = [u for u in hrefs if re.search(r"/funds/\\d+/", u)]
-    print(f"ANCHORS={len(hrefs)}; FUND_HREFS={len(fund_hrefs)}")
-    for url in fund_hrefs[:50]:
-        print("FUND_LINK=" + url)
-
-    scripts = [urljoin(BASE, s.get("src", "")) for s in soup.select("script[src]")]
-    print(f"SCRIPT_COUNT={len(scripts)}")
-    for url in scripts:
-        print("SCRIPT_SRC=" + url)
-
-    # Next.js/RSC pages may carry route data or API references outside anchors.
-    text = response.text
-    for pattern in (r"https?://api\\.bourseeye\\.com[^\\\"' ]+", r"/api/[^\\\"' ]+", r"/funds/\\d+/[^\\\"' ]+"):
-        matches = list(dict.fromkeys(re.findall(pattern, text)))
-        print(f"EMBEDDED_MATCHES pattern={pattern} count={len(matches)}")
-        for match in matches[:40]:
-            print("EMBEDDED=" + match[:500])
-
-    if not fund_hrefs:
-        print("DIAGNOSIS=No fund links in server response; inspect body/title and embedded payload above. This is not evidence that the fund history is unavailable.")
+    validated = 0
+    for fid, (slug, label) in sorted(found.items()):
+        url = f"{BASE}/funds/{fid}/{slug}/history"
+        try:
+            r = session.get(url, timeout=(20, 45))
+            r.raise_for_status()
+            page = BeautifulSoup(r.text, "html.parser")
+            tables = page.select("table")
+            history_table = None
+            for table in tables:
+                rows = table.select("tr")
+                headers = [norm(c.get_text(" ", strip=True)) for c in (rows[0].select("th,td") if rows else [])]
+                if len(headers) >= 5 and "تاریخ" in headers[0] and any("NAV" in h for h in headers):
+                    history_table = (headers, rows)
+                    break
+            if history_table:
+                headers, rows = history_table
+                data_rows = []
+                for row in rows[1:]:
+                    cells = [norm(c.get_text(" ", strip=True)) for c in row.select("th,td")]
+                    if cells:
+                        data_rows.append(cells)
+                validated += 1
+                print(f"FUND={fid}; name={label}; HTTP={r.status_code}; HISTORY_ROWS={len(data_rows)}; HEADERS={headers}; SAMPLE={data_rows[:3]}")
+            else:
+                print(f"FUND={fid}; name={label}; HTTP={r.status_code}; HISTORY_TABLE=NOT_FOUND; TABLES={len(tables)}; TEXT={norm(page.get_text(' ', strip=True))[:250]}")
+        except Exception as exc:
+            print(f"FUND={fid}; name={label}; ERROR={type(exc).__name__}:{exc}")
+    print(f"HISTORY_VALIDATED={validated}/{len(found)}")
 
 if __name__ == "__main__":
     main()
