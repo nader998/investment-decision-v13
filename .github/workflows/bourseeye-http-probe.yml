@@ -87,7 +87,15 @@ jobs:
 
           def check(path):
               name_url=BASE+path
-              hist_url=name_url+"/history"
+              # Resolve the canonical slug URL first. Numeric-only routes redirect to
+              # the canonical fund URL; append /history only after that redirect.
+              try:
+                  ds0, canonical_url, detail0=get(name_url)
+                  if ds0 != 200:
+                      canonical_url=name_url
+              except Exception:
+                  canonical_url=name_url
+              hist_url=canonical_url.rstrip("/")+"/history"
               result={"path":path,"history_http":0,"rows":0,"valid_nav":0,"valid_close_nav":0,"has_adjusted_nav":False,"history_ok":False,"detail_http":0,"flow_marker":False,"flow_text_excerpt":"","error":""}
               # History and detail are tested independently.
               try:
@@ -111,7 +119,7 @@ jobs:
               except Exception as e:
                   result["error"]="history: "+str(e)[:220]
               try:
-                  ds, du, detail=get(name_url)
+                  ds, du, detail=get(canonical_url)
                   result["detail_http"]=ds
                   plain=PlainText(); plain.feed(detail)
                   txt=" ".join(plain.parts)
