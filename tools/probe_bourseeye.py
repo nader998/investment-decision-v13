@@ -13,7 +13,7 @@ session = requests.Session()
 session.headers.update(HEADERS)
 
 def norm(value):
-    return re.sub(r"\\s+", " ", value or "").strip()
+    return re.sub(r"\s+", " ", value or "").strip()
 
 def main():
     response = session.get(BASE + "/funds/gold", timeout=(20, 45))
@@ -23,7 +23,7 @@ def main():
     found = {}
     for a in soup.select("a[href]"):
         url = urljoin(BASE, a.get("href", ""))
-        match = re.search(r"/funds/(\\d+)/([^/?#]+)", url)
+        match = re.search(r"/funds/(\d+)/([^/?#]+)", url)
         if match:
             found.setdefault(match.group(1), (match.group(2), norm(a.get_text(" ", strip=True))))
     print(f"FUND_LINKS={len(found)}")
