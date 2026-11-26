@@ -407,7 +407,8 @@ class GoldFundAutoDataActivity : Activity() {
             paired >= 60 -> "تاریخچه قیمت و NAV کامل است"
             registrationNumber == null -> "کد ثبت صندوق در فهرست TSETMC پیدا نشد؛ نام/نماد تطبیق داده نشد"
             navByDate.isEmpty() -> "NAV تاریخی از پاسخ صندوق استخراج نشد"
-            bourseeyeSaved > 0 -> "تاریخچه از Bourseeye به‌روزرسانی شد؛ $paired روز جفت‌شده"\n            else -> "تاریخچه جفت‌شده $paired روز است؛ برای درصدک ۶۰روزه کافی نیست"
+            bourseeyeSaved > 0 -> "تاریخچه از Bourseeye به‌روزرسانی شد؛ $paired روز جفت‌شده"
+            else -> "تاریخچه جفت‌شده $paired روز است؛ برای درصدک ۶۰روزه کافی نیست"
         }
         return HistoryMetrics(r5, r15, r30, percentile, paired, status)
     }
