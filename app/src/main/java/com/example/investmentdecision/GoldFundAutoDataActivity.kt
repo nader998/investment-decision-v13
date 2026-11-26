@@ -151,7 +151,30 @@ class GoldFundAutoDataActivity : Activity() {
                 val pool = Executors.newFixedThreadPool(4)
                 val quotes = try {
                     val tasks = candidates.take(100).map { item ->
-                        Callable { fetchQuote(item.first, item.second, item.third) }
+                        Callable {
+                            try {
+                                fetchQuote(item.first, item.second, item.third)
+                            } catch (e: Exception) {
+                                // Keep this fund in the result list; unavailable fields remain null.
+                                Quote(
+                                    symbol = item.first,
+                                    name = item.second,
+                                    insCode = item.third,
+                                    date = "داده پیدا نشد",
+                                    marketPriceToman = null,
+                                    navToman = null,
+                                    tradeValueToman = null,
+                                    netRealFlowToman = null,
+                                    spreadPercent = null,
+                                    return5 = null,
+                                    return15 = null,
+                                    return30 = null,
+                                    premiumPercentile60 = null,
+                                    pairedHistoryCount = 0,
+                                    historyStatus = "داده پیدا نشد: ${e.message ?: "خطای دریافت اطلاعات"}"
+                                )
+                            }
+                        }
                     }
                     pool.invokeAll(tasks, 55, TimeUnit.SECONDS)
                         .mapNotNull { future ->
@@ -545,7 +568,7 @@ class GoldFundAutoDataActivity : Activity() {
         card.addView(text("NAV ابطال: ${money(q.navToman)} تومان", 13, false))
         val premium = if (q.marketPriceToman != null && q.navToman != null && q.navToman > 0.0) {
             "${fmt((q.marketPriceToman / q.navToman - 1.0) * 100.0)}٪"
-        } else "فاقد داده"
+        } else "داده پیدا نشد"
         card.addView(text("فاصله قیمت بازار از NAV: $premium", 12, false))
         card.addView(text("ارزش معاملات روز: ${money(q.tradeValueToman)} تومان", 12, false))
         card.addView(text("خالص خرید حقیقی: ${money(q.netRealFlowToman)} تومان (خرید حقیقی منهای فروش حقیقی)", 12, false))
@@ -564,13 +587,13 @@ class GoldFundAutoDataActivity : Activity() {
     }
 
     private fun money(value: Double?): String =
-        if (value == null) "فاقد داده" else NumberFormat.getNumberInstance(Locale("fa", "IR"))
+        if (value == null) "داده پیدا نشد" else NumberFormat.getNumberInstance(Locale("fa", "IR"))
             .apply { maximumFractionDigits = 0 }.format(value)
 
     private fun fmt(value: Double): String = NumberFormat.getNumberInstance(Locale("fa", "IR"))
         .apply { maximumFractionDigits = 2 }.format(value)
 
-    private fun fmtOrMissing(value: Double?): String = value?.let { fmt(it) } ?: "فاقد داده"
+    private fun fmtOrMissing(value: Double?): String = value?.let { fmt(it) } ?: "داده پیدا نشد"
 
     private fun text(value: String, size: Int, bold: Boolean, gravityValue: Int = Gravity.START) =
         TextView(this).apply {
