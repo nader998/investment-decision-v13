@@ -360,46 +360,17 @@ class GoldFundAutoDataActivity : Activity() {
             .replace(Regex("\\s+"), "").trim().lowercase(Locale.ROOT)
 
     private fun normalizeHistoryDate(value: String): String? {
-        val raw = value.trim()
-        val digits = raw.filter { it.isDigit() }
+        // TSETMC dEven and Fund UpdateGregorianDate are Gregorian dates.
+        // Normalize both sources to YYYYMMDD; converting one side to Jalali
+        // prevents the NAV and closing-price histories from joining.
+        val digits = value.trim().filter { it.isDigit() }
         if (digits.length < 8) return null
-        val firstEight = digits.take(8)
-        // TSETMC daily prices use Solar Hijri YYYYMMDD. Fund detail dates are often
-        // Gregorian ISO strings; convert those before joining the two histories.
-        if ((raw.startsWith("19") || raw.startsWith("20")) &&
-            (raw.contains("-") || raw.contains("/"))) {
-            return try {
-                val datePart = raw.take(10).replace('/', '-')
-                val parts = datePart.split("-")
-                if (parts.size != 3) return null
-                val gy = parts[0].toInt()
-                val gm = parts[1].toInt()
-                val gd = parts[2].toInt()
-                val gDaysInMonth = intArrayOf(0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334)
-                var gy2 = gy + if (gm > 2) 1 else 0
-                var days = 355666 + 365 * gy + (gy2 + 3) / 4 -
-                    (gy2 + 99) / 100 + (gy2 + 399) / 400 + gd + gDaysInMonth[gm - 1]
-                var jy = -1595 + 33 * (days / 12053)
-                days %= 12053
-                jy += 4 * (days / 1461)
-                days %= 1461
-                if (days > 365) {
-                    jy += (days - 1) / 365
-                    days = (days - 1) % 365
-                }
-                val jm: Int
-                val jd: Int
-                if (days < 186) {
-                    jm = 1 + days / 31
-                    jd = 1 + days % 31
-                } else {
-                    jm = 7 + (days - 186) / 30
-                    jd = 1 + (days - 186) % 30
-                }
-                "%04d%02d%02d".format(Locale.US, jy, jm, jd)
-            } catch (_: Exception) { null }
-        }
-        return firstEight
+        val date = digits.take(8)
+        val year = date.substring(0, 4).toIntOrNull() ?: return null
+        val month = date.substring(4, 6).toIntOrNull() ?: return null
+        val day = date.substring(6, 8).toIntOrNull() ?: return null
+        if (year !in 1900..2200 || month !in 1..12 || day !in 1..31) return null
+        return date
     }
 
     private fun getJson(address: String): JSONObject {
