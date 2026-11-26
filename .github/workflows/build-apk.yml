@@ -2,9 +2,13 @@ name: Build Android Release APK
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - main
   push:
     branches:
       - main
+      - fix/auto-fund-data-completion
 
 jobs:
   build:
