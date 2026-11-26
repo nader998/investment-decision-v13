@@ -15,7 +15,7 @@ def get(url):
     return r
 
 def norm(s):
-    return re.sub(r"\\s+", " ", s or "").strip()
+    return re.sub(r"\s+", " ", s or "").strip()
 
 def main():
     listing = get(BASE + "/funds/gold")
@@ -23,7 +23,7 @@ def main():
     found = {}
     for a in soup.select('a[href]'):
         href = a.get("href", "")
-        m = re.search(r"/funds/(\\d+)/([^/?#]+)", href)
+        m = re.search(r"/funds/(\d+)/([^/?#]+)", href)
         if not m:
             continue
         fid = m.group(1)
