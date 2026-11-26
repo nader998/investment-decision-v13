@@ -20,7 +20,6 @@ import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import android.icu.util.PersianCalendar
 import java.util.TimeZone
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
@@ -371,17 +370,33 @@ class GoldFundAutoDataActivity : Activity() {
             (raw.contains("-") || raw.contains("/"))) {
             return try {
                 val datePart = raw.take(10).replace('/', '-')
-                val parsed = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply {
-                    isLenient = false
-                    timeZone = TimeZone.getTimeZone("UTC")
-                }.parse(datePart) ?: return null
-                val persian = PersianCalendar().apply { timeInMillis = parsed.time }
-                "%04d%02d%02d".format(
-                    Locale.US,
-                    persian.get(android.icu.util.Calendar.YEAR),
-                    persian.get(android.icu.util.Calendar.MONTH) + 1,
-                    persian.get(android.icu.util.Calendar.DAY_OF_MONTH)
-                )
+                val parts = datePart.split("-")
+                if (parts.size != 3) return null
+                val gy = parts[0].toInt()
+                val gm = parts[1].toInt()
+                val gd = parts[2].toInt()
+                val gDaysInMonth = intArrayOf(0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334)
+                var gy2 = gy + if (gm > 2) 1 else 0
+                var days = 355666 + 365 * gy + (gy2 + 3) / 4 -
+                    (gy2 + 99) / 100 + (gy2 + 399) / 400 + gd + gDaysInMonth[gm - 1]
+                var jy = -1595 + 33 * (days / 12053)
+                days %= 12053
+                jy += 4 * (days / 1461)
+                days %= 1461
+                if (days > 365) {
+                    jy += (days - 1) / 365
+                    days = (days - 1) % 365
+                }
+                val jm: Int
+                val jd: Int
+                if (days < 186) {
+                    jm = 1 + days / 31
+                    jd = 1 + days % 31
+                } else {
+                    jm = 7 + (days - 186) / 30
+                    jd = 1 + (days - 186) % 30
+                }
+                "%04d%02d%02d".format(Locale.US, jy, jm, jd)
             } catch (_: Exception) { null }
         }
         return firstEight
