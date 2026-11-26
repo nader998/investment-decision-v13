@@ -180,12 +180,11 @@ class GoldFundAutoDataActivity : Activity() {
                     // Each HTTP request already has connect/read timeouts; each task
                     // returns a placeholder Quote if its own fetch fails.
                     pool.invokeAll(tasks)
-                        .map { future ->
+                        .mapIndexed { index, future ->
                             try {
                                 future.get()
                             } catch (e: Exception) {
                                 // Defensive fallback: preserve the corresponding fund row.
-                                val index = tasks.indexOf(future)
                                 val item = candidates[index]
                                 Quote(
                                     symbol = item.first,
