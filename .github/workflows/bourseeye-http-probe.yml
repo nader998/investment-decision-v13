@@ -32,7 +32,7 @@ jobs:
           headers = Path("response-headers.txt").read_text(errors="replace")
           status = re.findall(r"HTTP_STATUS=(\d+)", Path("fetch-metadata.txt").read_text())
           status = int(status[-1]) if status else 0
-          rows = len(re.findall(r"<tr\\b", html, flags=re.I))
+          rows = len(re.findall(r"<tr\b", html, flags=re.I))
           has_date = "تاریخ" in html
           has_nav = ("NAV ابطال" in html) or ("nav" in html.lower())
           has_close = ("قیمت پایانی" in html) or ("قیمت" in html)
