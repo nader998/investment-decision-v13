@@ -30,7 +30,13 @@ def main():
     if not found:
         print("TITLE=" + norm(soup.title.get_text(" ", strip=True) if soup.title else "NO_TITLE"))
         print("BODY=" + norm(soup.get_text(" ", strip=True))[:1500])
-        raise SystemExit("No fund links in server response")
+        print("ANCHOR_SAMPLE=" + repr([a.get("href") for a in soup.select("a[href]")[:80]]))
+        print("HTML_FUND_OCCURRENCES=" + str(response.text.count("/funds/")))
+        for match in list(dict.fromkeys(re.findall(r".{0,100}/funds/.{0,180}", response.text)))[:30]:
+            print("HTML_FUND_CONTEXT=" + norm(match))
+        scripts = [urljoin(BASE, s.get("src", "")) for s in soup.select("script[src]")]
+        print("SCRIPTS=" + repr(scripts))
+        return
 
     validated = 0
     for fid, (slug, label) in sorted(found.items()):
