@@ -14,6 +14,7 @@ import android.widget.TextView
 import android.widget.Toast
 import org.json.JSONArray
 import org.json.JSONObject
+import org.jsoup.Jsoup
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.NumberFormat
@@ -388,6 +389,15 @@ class GoldFundAutoDataActivity : Activity() {
             }
         }
 
+        // TSETMC NAV history often has fewer than 60 matching observations.
+        // Fill/refresh from Bourseeye's independently verified historical table.
+        var bourseeyeSaved = 0
+        try {
+            bourseeyeSaved = fetchBourseeyeHistory(insCode, fundName, symbol, historyStore)
+        } catch (_: Exception) {
+            // Keep valid TSETMC/cache observations; missing source data stays missing.
+        }
+
         val paired = historyStore.pairedObservationCount(insCode)
         val r5 = historyStore.navReturnPercent(insCode, 5)
         val r15 = historyStore.navReturnPercent(insCode, 15)
@@ -397,9 +407,130 @@ class GoldFundAutoDataActivity : Activity() {
             paired >= 60 -> "تاریخچه قیمت و NAV کامل است"
             registrationNumber == null -> "کد ثبت صندوق در فهرست TSETMC پیدا نشد؛ نام/نماد تطبیق داده نشد"
             navByDate.isEmpty() -> "NAV تاریخی از پاسخ صندوق استخراج نشد"
-            else -> "تاریخچه جفت‌شده $paired روز است؛ برای درصدک ۶۰روزه کافی نیست"
+            bourseeyeSaved > 0 -> "تاریخچه از Bourseeye به‌روزرسانی شد؛ $paired روز جفت‌شده"\n            else -> "تاریخچه جفت‌شده $paired روز است؛ برای درصدک ۶۰روزه کافی نیست"
         }
         return HistoryMetrics(r5, r15, r30, percentile, paired, status)
+    }
+
+    /**
+     * Bourseeye is used as the historical fallback because its public gold-fund
+     * history pages expose daily adjusted NAV, redemption NAV and closing price.
+     * Rows are stored under Jalali YYYYMMDD keys so lexical ordering remains chronological.
+     */
+    private fun fetchBourseeyeHistory(
+        insCode: String,
+        fundName: String,
+        symbol: String,
+        store: GoldFundHistoryStore
+    ): Int {
+        val listing = downloadHtml("https://bourseeye.com/funds/gold")
+        val links = Jsoup.parse(listing, "https://bourseeye.com").select("a[href]")
+        val wanted = setOf(normalizeFundName(fundName), normalizeFundName(symbol))
+            .filter { it.length >= 3 }.toSet()
+        val candidates = links.mapNotNull { a ->
+            val href = a.absUrl("href")
+            val m = Regex("/funds/(\\d+)/([^/?#]+)").find(href) ?: return@mapNotNull null
+            val label = normalizeFundName(a.text())
+            val score = wanted.maxOfOrNull { w ->
+                when {
+                    label == w -> 100
+                    label.contains(w) || w.contains(label) && label.length >= 5 -> 80
+                    else -> {
+                        val tokens = w.split(Regex("[^\\p{L}\\p{N}]+")).filter { it.length >= 3 }.toSet()
+                        val other = label.split(Regex("[^\\p{L}\\p{N}]+")).filter { it.length >= 3 }.toSet()
+                        if (tokens.isEmpty()) 0 else (tokens.intersect(other).size * 100 / tokens.size)
+                    }
+                }
+            } ?: 0
+            Triple(href, a.text(), score)
+        }
+        val best = candidates.maxByOrNull { it.third } ?: return 0
+        if (best.third < 65) return 0
+        val historyUrl = best.first.trimEnd('/') + "/history"
+        val html = downloadHtml(historyUrl)
+        val doc = Jsoup.parse(html, historyUrl)
+        val table = doc.select("table").firstOrNull { t ->
+            val heads = t.select("tr").firstOrNull()?.select("th,td")?.map { it.text() } ?: emptyList()
+            heads.size >= 5 && heads[0].contains("تاریخ") &&
+                heads.any { it.contains("NAV تعدیل") || it.contains("NAV ابطال") } &&
+                heads.any { it.contains("قیمت پایانی") }
+        } ?: return 0
+
+        val header = table.select("tr").first().select("th,td").map { it.text().trim() }
+        val navIndex = header.indexOfFirst { it.contains("NAV تعدیل") }
+            .takeIf { it >= 0 } ?: header.indexOfFirst { it.contains("NAV ابطال") }
+        val closeIndex = header.indexOfFirst { it.contains("قیمت پایانی") }
+        if (navIndex < 0 || closeIndex < 0) return 0
+
+        var saved = 0
+        table.select("tr").drop(1).forEach { row ->
+            val cells = row.select("td,th").map { it.text().trim() }
+            if (cells.size <= maxOf(navIndex, closeIndex)) return@forEach
+            val dateKey = parseBourseeyeJalaliDate(cells[0]) ?: return@forEach
+            val nav = parsePersianToman(cells[navIndex]) ?: return@forEach
+            val close = parsePersianToman(cells[closeIndex]) ?: return@forEach
+            if (nav > 0.0 && close > 0.0) {
+                store.upsert(insCode, dateKey, close, nav)
+                saved++
+            }
+        }
+        return saved
+    }
+
+    private fun downloadHtml(address: String): String {
+        val connection = (URL(address).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 15000
+            readTimeout = 20000
+            useCaches = false
+            setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36")
+            setRequestProperty("Accept", "text/html,application/xhtml+xml")
+            setRequestProperty("Accept-Language", "fa-IR,fa;q=0.9,en;q=0.7")
+        }
+        try {
+            val code = connection.responseCode
+            if (code !in 200..299) throw IllegalStateException("Bourseeye HTTP $code")
+            return connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun parsePersianToman(raw: String): Double? {
+        val ascii = raw.map { ch ->
+            when (ch) {
+                in '۰'..'۹' -> ('0'.code + ch.code - '۰'.code).toChar()
+                in '٠'..'٩' -> ('0'.code + ch.code - '٠'.code).toChar()
+                '٫' -> '.'
+                '−', '－' -> '-'
+                else -> ch
+            }
+        }.joinToString("")
+        val number = Regex("-?[0-9][0-9,]*(?:\\.[0-9]+)?").find(ascii)?.value
+            ?.replace(",", "")?.toDoubleOrNull()
+        return number?.takeIf { it.isFinite() && it > 0.0 }
+    }
+
+    private fun parseBourseeyeJalaliDate(raw: String): String? {
+        val value = raw.map { ch ->
+            when (ch) {
+                in '۰'..'۹' -> ('0'.code + ch.code - '۰'.code).toChar()
+                in '٠'..'٩' -> ('0'.code + ch.code - '٠'.code).toChar()
+                else -> ch
+            }
+        }.joinToString("").trim()
+        val match = Regex("(\\d{1,2})\\s+([\\p{L}]+)\\s+(\\d{4})").find(value) ?: return null
+        val day = match.groupValues[1].toIntOrNull() ?: return null
+        val monthName = match.groupValues[2]
+        val year = match.groupValues[3].toIntOrNull() ?: return null
+        val months = mapOf(
+            "فروردین" to 1, "اردیبهشت" to 2, "خرداد" to 3, "تیر" to 4,
+            "مرداد" to 5, "شهریور" to 6, "مهر" to 7, "آبان" to 8,
+            "آذر" to 9, "دی" to 10, "بهمن" to 11, "اسفند" to 12
+        )
+        val month = months[monthName] ?: return null
+        if (year !in 1300..1500 || day !in 1..31) return null
+        return "%04d%02d%02d".format(Locale.ROOT, year, month, day)
     }
 
     private fun normalizeFundName(value: String): String =
