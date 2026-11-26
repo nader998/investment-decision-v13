@@ -530,7 +530,35 @@ class GoldFundAutoDataActivity : Activity() {
         )
         val month = months[monthName] ?: return null
         if (year !in 1300..1500 || day !in 1..31) return null
-        return "%04d%02d%02d".format(Locale.ROOT, year, month, day)
+        // Convert Jalali to Gregorian before storing: TSETMC rows already use
+        // Gregorian YYYYMMDD. Mixing calendar systems corrupts chronological returns.
+        var jy = year - 979
+        var days = 365 * jy + (jy / 33) * 8 + ((jy % 33) + 3) / 4 + 79
+        days += if (month <= 6) (month - 1) * 31 + day - 1
+                else 186 + (month - 7) * 30 + day - 1
+        var gy = 1600 + 400 * (days / 146097)
+        days %= 146097
+        if (days > 36524) {
+            gy += 100 * ((days - 1) / 36524)
+            days = (days - 1) % 36524
+            if (days >= 365) days++
+        }
+        gy += 4 * (days / 1461)
+        days %= 1461
+        if (days > 365) {
+            gy += (days - 1) / 365
+            days = (days - 1) % 365
+        }
+        var gd = days + 1
+        val leap = gy % 4 == 0 && (gy % 100 != 0 || gy % 400 == 0)
+        val monthLengths = intArrayOf(31, if (leap) 29 else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+        var gm = 1
+        while (gm <= 12 && gd > monthLengths[gm - 1]) {
+            gd -= monthLengths[gm - 1]
+            gm++
+        }
+        if (gm !in 1..12) return null
+        return "%04d%02d%02d".format(Locale.ROOT, gy, gm, gd)
     }
 
     private fun normalizeFundName(value: String): String =
