@@ -354,9 +354,17 @@ class GoldFundAutoDataActivity : Activity() {
 
     private fun fetchAndStoreHistory(insCode: String, fundName: String, symbol: String): HistoryMetrics {
         val historyStore = GoldFundHistoryStore(this)
-        val priceRoot = getJson("https://cdn.tsetmc.com/api/ClosingPrice/GetClosingPriceDailyList/$insCode/60")
-        val priceRows = findArray(priceRoot, setOf("closingPriceDaily"))
-        if (priceRows.length() == 0) return HistoryMetrics(null, null, null, null, 0, "تاریخچه قیمت خالی است")
+        // Some instruments return HTTP 400 from TSETMC's daily-history endpoint.
+        // Continue with the independent Bourseeye history fallback instead of
+        // aborting the entire fund's history calculation.
+        var priceHistoryError: String? = null
+        val priceRows = try {
+            val priceRoot = getJson("https://cdn.tsetmc.com/api/ClosingPrice/GetClosingPriceDailyList/$insCode/60")
+            findArray(priceRoot, setOf("closingPriceDaily"))
+        } catch (e: Exception) {
+            priceHistoryError = e.message ?: "خطای دریافت تاریخچه قیمت TSETMC"
+            JSONArray()
+        }
 
         val prices = mutableMapOf<String, Double>()
         for (i in 0 until priceRows.length()) {
