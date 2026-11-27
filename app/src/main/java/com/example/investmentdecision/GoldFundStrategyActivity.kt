@@ -34,7 +34,9 @@ class GoldFundStrategyActivity : Activity() {
         val volume: Double,
         val spread: Double,
         val flowPct: Double,
-        val dataComplete: Boolean
+        val dataComplete: Boolean,
+        // TSETMC net individual-investor trading flow; not fund issuance/redemption cash flow.
+        val netRealFlowToman: Double? = null
     ) {
         val premium: Double get() = (price / nav - 1.0) * 100.0
         val mediumReturn: Double get() = (r15 + r30) / 2.0
@@ -372,7 +374,8 @@ class GoldFundStrategyActivity : Activity() {
                     // TSETMC individual investor trading flow is not fund
                     // subscription/redemption cash flow and is not scored.
                     flowPct = 0.0,
-                    dataComplete = true
+                    dataComplete = true,
+                    netRealFlowToman = value("netRealFlowToman")
                 ))
             }
         } catch (_: Exception) {
@@ -665,7 +668,7 @@ class GoldFundStrategyActivity : Activity() {
             12, false
         ))
         explanation.addView(label(
-            "امتیاز کل از حباب تاریخی، بازده ۱۵/۳۰روزه، مومنتوم ۵روزه و نقدشوندگی محاسبه و به مقیاس ۱۰۰ تبدیل می‌شود. جریان واقعی صدور/ابطال فعلاً در امتیاز وارد نشده است.",
+            "امتیاز کل از حباب تاریخی، بازده ۱۵/۳۰روزه، مومنتوم ۵روزه و نقدشوندگی محاسبه می‌شود. خالص خرید حقیقی معاملات ثانویه جداگانه نمایش داده می‌شود؛ جریان نقدی صدور/ابطال منبع تأییدشده ندارد و در امتیاز وارد نمی‌شود.",
             12, false
         ))
         explanation.addView(label(
@@ -695,7 +698,11 @@ class GoldFundStrategyActivity : Activity() {
                 12, false
             ))
             c.addView(label(
-                "نقدشوندگی: ${fmt(item.liquidityScore)} از ۱۵ | جریان پول: ${fmt(item.flowScore)} از ۱۰",
+                "نقدشوندگی: ${fmt(item.liquidityScore)} از ۱۵",
+                12, false
+            ))
+            c.addView(label(
+                "خالص خرید حقیقی معاملات ثانویه: ${f.netRealFlowToman?.let { fmt(it) + \" تومان\" } ?: \"داده پیدا نشد\"} | در امتیاز لحاظ نشده",
                 12, false
             ))
             c.addView(label(item.action, 14, true).apply {
@@ -806,6 +813,7 @@ class GoldFundStrategyActivity : Activity() {
                 put("volume", f.volume)
                 put("spread", f.spread)
                 put("flowPct", f.flowPct)
+                if (f.netRealFlowToman != null) put("netRealFlowToman", f.netRealFlowToman) else put("netRealFlowToman", JSONObject.NULL)
                 put("dataComplete", f.dataComplete)
             })
         }
@@ -833,7 +841,8 @@ class GoldFundStrategyActivity : Activity() {
                     o.getDouble("flowPct"),
                     // Saved snapshots must be refreshed and re-imported
                     // after app restart before they can produce a signal.
-                    false
+                    false,
+                    if (o.isNull("netRealFlowToman")) null else o.optDouble("netRealFlowToman").takeIf { it.isFinite() }
                 ))
             }
         } catch (_: Exception) {
