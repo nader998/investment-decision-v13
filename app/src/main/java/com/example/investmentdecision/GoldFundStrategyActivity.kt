@@ -332,6 +332,9 @@ class GoldFundStrategyActivity : Activity() {
 
                 val name = item.optString("name").ifBlank { item.optString("symbol") }
                 val asOf = item.optString("date")
+                // Do not accept placeholder text such as "تاریخ در پاسخ موجود نیست"
+                // as a fresh market timestamp for a buy/sell candidate.
+                val hasValidMarketDate = Regex("\\d{8}").containsMatchIn(asOf)
                 val price = value("marketPriceToman")
                 val nav = value("navToman")
                 val r5 = value("return5")
@@ -342,7 +345,7 @@ class GoldFundStrategyActivity : Activity() {
                 val spread = value("spreadPercent")
                 val paired = item.optInt("pairedHistoryCount", 0)
 
-                val complete = name.isNotBlank() && asOf.isNotBlank() &&
+                val complete = name.isNotBlank() && hasValidMarketDate &&
                     price != null && price > 0.0 &&
                     nav != null && nav > 0.0 &&
                     r5 != null && r15 != null && r30 != null &&
@@ -530,7 +533,9 @@ class GoldFundStrategyActivity : Activity() {
             volume = volume,
             spread = spread,
             flowPct = flow,
-            dataComplete = dataComplete
+            // Manual entries are retained for reference but never qualify
+            // for automatic buy/sell ranking without a verified live snapshot.
+            dataComplete = false
         )
 
         val existingIndex = funds.indexOfFirst {
@@ -826,7 +831,9 @@ class GoldFundStrategyActivity : Activity() {
                     o.getDouble("volume"),
                     o.getDouble("spread"),
                     o.getDouble("flowPct"),
-                    o.optBoolean("dataComplete", true)
+                    // Saved snapshots must be refreshed and re-imported
+                    // after app restart before they can produce a signal.
+                    false
                 ))
             }
         } catch (_: Exception) {
