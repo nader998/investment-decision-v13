@@ -119,6 +119,8 @@ def main():
                     continue
                 valid = 0
                 data_count = 0
+                valid_rows = []
+                month_map = {"فروردین":1,"اردیبهشت":2,"خرداد":3,"تیر":4,"مرداد":5,"شهریور":6,"مهر":7,"آبان":8,"آذر":9,"دی":10,"بهمن":11,"اسفند":12}
                 for tr in trs[1:]:
                     cells = [c.get_text(" ",strip=True) for c in tr.select("td,th")]
                     if len(cells) <= max(date_i,nav_i,close_i):
@@ -129,12 +131,25 @@ def main():
                         x = re.sub(r"[^0-9.]", "", x)
                         try: return float(x) if x else None
                         except: return None
-                    if re.search(r"\d{4}", cells[date_i]) and (number(cells[nav_i]) or 0) > 0 and (number(cells[close_i]) or 0) > 0:
-                        valid += 1
-                result.update(rows=data_count, valid_pairs=valid, headers=headers)
+                    date_text = cells[date_i].translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789"))
+                    date_match = re.search(r"(\d{1,2})\s+([\wآ-ی]+)\s+(\d{4})", date_text)
+                    nav_value, close_value = number(cells[nav_i]), number(cells[close_i])
+                    if date_match and nav_value and close_value:
+                        day, month_name, year = int(date_match.group(1)), date_match.group(2), int(date_match.group(3))
+                        month = month_map.get(month_name)
+                        if month and 1 <= day <= 31:
+                            valid += 1
+                            valid_rows.append((year*10000+month*100+day, nav_value, close_value))
+                unique = {row[0]: row for row in valid_rows}
+                ordered = sorted(unique.values(), key=lambda x:x[0], reverse=True)
+                def nav_return(days):
+                    if len(ordered) <= days or ordered[days][1] <= 0:
+                        return None
+                    return round((ordered[0][1]/ordered[days][1]-1)*100, 4)
+                result.update(rows=data_count, valid_pairs=valid, unique_pairs=len(unique), return5=nav_return(5), return15=nav_return(15), return30=nav_return(30), headers=headers)
                 break
             page_data[fid] = result
-            print(f"HISTORY fid={fid}; label={item['label']}; HTTP={result['http']}; ROWS={result['rows']}; VALID_PRICE_NAV_PAIRS={result['valid_pairs']}; HEADERS={result['headers']}")
+            print(f"HISTORY fid={fid}; label={item['label']}; HTTP={result['http']}; ROWS={result['rows']}; VALID_PRICE_NAV_PAIRS={result['valid_pairs']}; UNIQUE_PAIRS={result.get('unique_pairs',0)}; NAV_RETURN_5_15_30={result.get('return5')}/{result.get('return15')}/{result.get('return30')}; HEADERS={result['headers']}")
         except Exception as exc:
             page_data[fid] = {"http":"ERROR","rows":0,"valid_pairs":0,"headers":[],"url":url}
             print(f"HISTORY fid={fid}; label={item['label']}; ERROR={type(exc).__name__}:{exc}")
