@@ -6,8 +6,10 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 
 /**
- * Local store for paired daily closing-price and redemption-NAV observations.
- * A row is eligible for premium statistics only when both values are valid.
+ * Local store for paired daily closing-price and NAV observations.
+ * A row is eligible for premium statistics and trading-day returns only
+ * when both values are valid. NAV-only dates are retained for reference
+ * but are not counted as exchange trading days.
  */
 class GoldFundHistoryStore(context: Context) :
     SQLiteOpenHelper(context, "gold_fund_history.db", null, 1) {
@@ -34,16 +36,30 @@ class GoldFundHistoryStore(context: Context) :
 
     fun upsert(insCode: String, date: String, closeToman: Double?, navToman: Double?) {
         if (insCode.isBlank() || !date.matches(Regex("\\d{8}"))) return
+        val db = writableDatabase
+        var existingClose: Double? = null
+        var existingNav: Double? = null
+        db.rawQuery(
+            "SELECT close_toman, nav_toman FROM daily_history WHERE ins_code = ? AND trade_date = ?",
+            arrayOf(insCode, date)
+        ).use { cursor ->
+            if (cursor.moveToFirst()) {
+                if (!cursor.isNull(0)) existingClose = cursor.getDouble(0)
+                if (!cursor.isNull(1)) existingNav = cursor.getDouble(1)
+            }
+        }
+        // A missing value from one source must never erase a valid value already
+        // collected from another source for the same fund/date.
+        val finalClose = closeToman?.takeIf { it.isFinite() && it > 0.0 } ?: existingClose
+        val finalNav = navToman?.takeIf { it.isFinite() && it > 0.0 } ?: existingNav
         val values = ContentValues().apply {
             put("ins_code", insCode)
             put("trade_date", date)
-            if (closeToman != null && closeToman > 0.0) put("close_toman", closeToman)
-            else putNull("close_toman")
-            if (navToman != null && navToman > 0.0) put("nav_toman", navToman)
-            else putNull("nav_toman")
+            if (finalClose != null) put("close_toman", finalClose) else putNull("close_toman")
+            if (finalNav != null) put("nav_toman", finalNav) else putNull("nav_toman")
             put("fetched_at", System.currentTimeMillis())
         }
-        writableDatabase.insertWithOnConflict(
+        db.insertWithOnConflict(
             "daily_history", null, values, SQLiteDatabase.CONFLICT_REPLACE
         )
     }
@@ -72,6 +88,22 @@ class GoldFundHistoryStore(context: Context) :
         return result
     }
 
+    /** Latest paired daily closes, newest first; used only for technical price levels. */
+    fun latestClosingPrices(insCode: String, limit: Int = 60): List<Double> {
+        val result = mutableListOf<Double>()
+        readableDatabase.rawQuery(
+            """
+            SELECT close_toman FROM daily_history
+            WHERE ins_code = ? AND close_toman > 0
+            ORDER BY trade_date DESC LIMIT ?
+            """.trimIndent(),
+            arrayOf(insCode, limit.coerceIn(1, 120).toString())
+        ).use { cursor ->
+            while (cursor.moveToNext()) result.add(cursor.getDouble(0))
+        }
+        return result
+    }
+
     fun pairedObservationCount(insCode: String): Int {
         readableDatabase.rawQuery(
             "SELECT COUNT(*) FROM daily_history WHERE ins_code = ? AND close_toman > 0 AND nav_toman > 0",
@@ -79,6 +111,29 @@ class GoldFundHistoryStore(context: Context) :
         ).use { cursor ->
             return if (cursor.moveToFirst()) cursor.getInt(0) else 0
         }
+    }
+
+    fun navReturnPercent(insCode: String, tradingDays: Int): Double? {
+        if (tradingDays <= 0) return null
+        val values = mutableListOf<Double>()
+        readableDatabase.rawQuery(
+            """
+            SELECT nav_toman FROM daily_history
+            WHERE ins_code = ? AND close_toman > 0 AND nav_toman > 0
+            ORDER BY trade_date DESC LIMIT ?
+            """.trimIndent(),
+            arrayOf(insCode, (tradingDays + 1).toString())
+        ).use { cursor ->
+            while (cursor.moveToNext()) values.add(cursor.getDouble(0))
+        }
+        // These are explicitly trading-day returns: count only dates with a
+        // valid exchange closing price AND a valid NAV. NAV-only publication
+        // dates are retained in storage but must not shorten the trading window.
+        if (values.size <= tradingDays) return null
+        val latest = values.first()
+        val prior = values[tradingDays]
+        if (prior <= 0.0) return null
+        return (latest / prior - 1.0) * 100.0
     }
 
     fun percentile60(insCode: String): Double? {

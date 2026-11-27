@@ -11,8 +11,8 @@ android {
         applicationId = "com.example.investmentdecision"
         minSdk = 24
         targetSdk = 35
-        versionCode = 5
-        versionName = "1.5"
+        versionCode = 14
+        versionName = "1.14"
     }
 
     signingConfigs {
@@ -39,4 +39,9 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+}
+
+dependencies {
+    implementation("org.jsoup:jsoup:1.18.3")
+    testImplementation("junit:junit:4.13.2")
 }

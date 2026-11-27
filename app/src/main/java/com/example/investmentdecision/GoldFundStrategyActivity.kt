@@ -33,7 +33,11 @@ class GoldFundStrategyActivity : Activity() {
         val premiumPercentile: Double,
         val volume: Double,
         val spread: Double,
-        val flowPct: Double
+        val flowPct: Double,
+        val dataComplete: Boolean,
+        // TSETMC net individual-investor trading flow; not fund issuance/redemption cash flow.
+        val netRealFlowToman: Double? = null,
+        val insCode: String? = null
     ) {
         val premium: Double get() = (price / nav - 1.0) * 100.0
         val mediumReturn: Double get() = (r15 + r30) / 2.0
@@ -96,6 +100,17 @@ class GoldFundStrategyActivity : Activity() {
             addView(page)
         }
 
+        page.addView(Button(this).apply {
+            text = "راهنمای نوسان‌گیری و شرایط سیگنال‌ها"
+            isAllCaps = false
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            setBackgroundColor(blue)
+            setOnClickListener {
+                startActivity(Intent(this@GoldFundStrategyActivity, GoldFundStrategyGuideActivity::class.java))
+            }
+        }, matchWrap())
+
         page.addView(label("نوسان‌گیری صندوق‌های طلا", 23, true, Gravity.CENTER))
         page.addView(label(
             "تحلیل نسبی صندوق‌ها بر اساس حباب، بازدهی، مومنتوم، نقدشوندگی و جریان پول",
@@ -145,12 +160,21 @@ class GoldFundStrategyActivity : Activity() {
         val importCard = card()
         importCard.addView(label("ورود اطلاعات دریافت‌شده به محاسبه‌گر", 17, true))
         importCard.addView(label(
-            "پس از دریافت اطلاعات در صفحه قبل، صندوق را از فهرست زیر انتخاب کن. قیمت، NAV، ارزش معاملات، اسپرد و در صورت وجود درصدک ۶۰روزه وارد می‌شوند. بازده NAV و جریان واقعی صدور/ابطال خودکار در دسترس نیستند و نباید با خالص خرید حقیقی جایگزین شوند.",
+            "پس از دریافت اطلاعات، صندوق را انتخاب کن. قیمت، NAV، ارزش معاملات، اسپرد، بازده NAV در ۵/۱۵/۳۰ روز و در صورت تکمیل تاریخچه درصدک ۶۰روزه وارد می‌شوند. جریان واقعی صدور/ابطال از این API قابل تأیید نیست و جداگانه باید وارد شود.",
             12, false
         ))
         autoImportArea = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         importCard.addView(autoImportArea)
         page.addView(importCard, matchWrap())
+
+        page.addView(Button(this).apply {
+            text = "تحلیل خودکار صندوق‌های دارای داده کامل"
+            isAllCaps = false
+            textSize = 15f
+            setTextColor(Color.WHITE)
+            setBackgroundColor(green)
+            setOnClickListener { importCompleteAutoQuotes() }
+        }, matchWrap())
 
         val form = card()
         form.addView(label("ثبت یا به‌روزرسانی اطلاعات صندوق", 18, true))
@@ -257,14 +281,22 @@ class GoldFundStrategyActivity : Activity() {
                         navInput.setText(if (nav.isFinite() && nav > 0.0) nav.toString() else "")
                         volumeInput.setText(if (volume.isFinite() && volume >= 0.0) volume.toString() else "")
                         spreadInput.setText(if (spread.isFinite() && spread >= 0.0) spread.toString() else "")
-                        premiumPercentileInput.setText(percentile?.toString() ?: "")
-                        r5Input.text.clear()
-                        r15Input.text.clear()
-                        r30Input.text.clear()
+                        val r5 = item.optDouble("return5", Double.NaN)
+                        val r15 = item.optDouble("return15", Double.NaN)
+                        val r30 = item.optDouble("return30", Double.NaN)
+                        val cachedPercentile = item.optDouble("premiumPercentile60", Double.NaN)
+                        premiumPercentileInput.setText(
+                            if (cachedPercentile.isFinite()) cachedPercentile.toString()
+                            else percentile?.toString() ?: ""
+                        )
+                        r5Input.setText(if (r5.isFinite()) r5.toString() else "")
+                        r15Input.setText(if (r15.isFinite()) r15.toString() else "")
+                        r30Input.setText(if (r30.isFinite()) r30.toString() else "")
+                        // Real subscription/redemption cash flow is not supplied by these TSETMC endpoints.
                         flowInput.text.clear()
                         Toast.makeText(
                             this@GoldFundStrategyActivity,
-                            "داده‌های موجود وارد شد؛ بازده‌ها و جریان واقعی صدور/ابطال را فقط با منبع معتبر تکمیل کن.",
+                            "قیمت، NAV و بازده‌های قابل‌محاسبه وارد شد؛ جریان واقعی صدور/ابطال همچنان نیازمند منبع جداگانه است.",
                             Toast.LENGTH_LONG
                         ).show()
                     }
@@ -281,6 +313,107 @@ class GoldFundStrategyActivity : Activity() {
                 12, false
             ))
         }
+    }
+
+    /**
+     * Imports only real, non-null automatic quote fields. Older/manual records
+     * are marked ineligible for this automatic run so stale values cannot create
+     * a buy/sell candidate alongside the newly fetched market snapshot.
+     */
+    private fun importCompleteAutoQuotes() {
+        val raw = getSharedPreferences("tsetmc_fund_cache", MODE_PRIVATE)
+            .getString("last_quotes", null)
+        if (raw.isNullOrBlank()) {
+            Toast.makeText(this, "ابتدا اطلاعات خودکار صندوق‌ها را دریافت کن.", Toast.LENGTH_LONG).show()
+            return
+        }
+        val savedAt = getSharedPreferences("tsetmc_fund_cache", MODE_PRIVATE)
+            .getLong("saved_at", 0L)
+        if (savedAt <= 0L || System.currentTimeMillis() - savedAt > 6L * 60L * 60L * 1000L) {
+            Toast.makeText(this, "داده ذخیره‌شده قدیمی است؛ ابتدا دریافت خودکار را دوباره اجرا کن.", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        val imported = mutableListOf<Fund>()
+        var incomplete = 0
+        try {
+            val quotes = JSONArray(raw)
+            for (i in 0 until quotes.length()) {
+                val item = quotes.optJSONObject(i) ?: continue
+                fun value(key: String): Double? =
+                    if (item.isNull(key)) null
+                    else item.optDouble(key, Double.NaN).takeIf { it.isFinite() }
+
+                val name = item.optString("name").ifBlank { item.optString("symbol") }
+                val asOf = item.optString("date")
+                // Do not accept placeholder text such as "تاریخ در پاسخ موجود نیست"
+                // as a fresh market timestamp for a buy/sell candidate.
+                val hasValidMarketDate = Regex("\\d{8}").containsMatchIn(asOf)
+                val price = value("marketPriceToman")
+                val nav = value("navToman")
+                val r5 = value("return5")
+                val r15 = value("return15")
+                val r30 = value("return30")
+                val percentile = value("premiumPercentile60")
+                val volume = value("tradeValueToman")
+                val spread = value("spreadPercent")
+                val paired = item.optInt("pairedHistoryCount", 0)
+
+                val complete = name.isNotBlank() && hasValidMarketDate &&
+                    price != null && price > 0.0 &&
+                    nav != null && nav > 0.0 &&
+                    r5 != null && r15 != null && r30 != null &&
+                    percentile != null && percentile in 0.0..100.0 &&
+                    volume != null && volume >= 0.0 &&
+                    spread != null && spread >= 0.0 &&
+                    paired >= 60
+                if (!complete) {
+                    incomplete++
+                    continue
+                }
+
+                imported.add(Fund(
+                    name = item.optString("symbol").ifBlank { name },
+                    asOf = asOf,
+                    price = price!!,
+                    nav = nav!!,
+                    r5 = r5!!,
+                    r15 = r15!!,
+                    r30 = r30!!,
+                    premiumPercentile = percentile!!,
+                    volume = volume!!,
+                    spread = spread!!,
+                    // TSETMC individual investor trading flow is not fund
+                    // subscription/redemption cash flow and is not scored.
+                    flowPct = 0.0,
+                    dataComplete = true,
+                    netRealFlowToman = value("netRealFlowToman"),
+                    insCode = item.optString("insCode").takeIf { it.isNotBlank() }
+                ))
+            }
+        } catch (_: Exception) {
+            Toast.makeText(this, "خواندن داده‌های خودکار ممکن نشد؛ دوباره دریافت کن.", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        // Disable older records for this run; only the fresh, complete auto
+        // snapshot can participate in the ranking and candidate signals.
+        for (i in funds.indices) funds[i] = funds[i].copy(dataComplete = false)
+        imported.forEach { fresh ->
+            val existing = funds.indexOfFirst {
+                it.name.equals(fresh.name, ignoreCase = true)
+            }
+            if (existing >= 0) funds[existing] = fresh else funds.add(fresh)
+        }
+
+        saveFunds()
+        renderFunds()
+        analyze()
+        Toast.makeText(
+            this,
+            "صندوق کامل واردشده: ${imported.size} | داده ناکامل/فاقد تاریخچه ۶۰روزه: $incomplete",
+            Toast.LENGTH_LONG
+        ).show()
     }
 
     private fun addInput(
@@ -350,13 +483,33 @@ class GoldFundStrategyActivity : Activity() {
 
         val price = requiredNumber(priceInput, "قیمت بازار") ?: return
         val nav = requiredNumber(navInput, "NAV") ?: return
+        fun optionalNumber(field: EditText, title: String): Double? {
+            if (field.text.toString().isBlank()) return null
+            val value = number(field)
+            if (value == null) {
+                showValidationError("$title نامعتبر است؛ فقط عدد وارد کن یا فیلد را خالی بگذار.")
+                field.requestFocus()
+            }
+            return value
+        }
+
+        // Missing NAV returns must never be converted to numeric zero.
+        // Zero is a valid measured return and must be distinguishable from missing data.
         val r5 = requiredNumber(r5Input, "بازده ۵ روزه") ?: return
         val r15 = requiredNumber(r15Input, "بازده ۱۵ روزه") ?: return
         val r30 = requiredNumber(r30Input, "بازده ۳۰ روزه") ?: return
-        val percentile = requiredNumber(premiumPercentileInput, "درصدک حباب ۶۰ روزه") ?: return
-        val volume = requiredNumber(volumeInput, "ارزش معاملات روزانه") ?: return
-        val spread = requiredNumber(spreadInput, "اختلاف قیمت خرید و فروش") ?: return
-        val flow = requiredNumber(flowInput, "خالص ورود پول") ?: return
+        val percentile = optionalNumber(premiumPercentileInput, "درصدک حباب ۶۰ روزه") ?: 50.0
+        if (premiumPercentileInput.text.isNotBlank() && number(premiumPercentileInput) == null) return
+        val volume = optionalNumber(volumeInput, "ارزش معاملات روزانه") ?: 0.0
+        if (volumeInput.text.isNotBlank() && number(volumeInput) == null) return
+        val spread = optionalNumber(spreadInput, "اختلاف قیمت خرید و فروش") ?: 0.0
+        if (spreadInput.text.isNotBlank() && number(spreadInput) == null) return
+        val flow = optionalNumber(flowInput, "خالص ورود پول") ?: 0.0
+        if (flowInput.text.isNotBlank() && number(flowInput) == null) return
+        // Subscription/redemption flow is not available from the current verified source.
+        // Do not make it mandatory; all six measurable strategy inputs below are required.
+        val dataComplete = listOf(r5Input, r15Input, r30Input, premiumPercentileInput,
+            volumeInput, spreadInput).all { it.text.toString().isNotBlank() }
 
         if (price <= 0.0) {
             showValidationError("قیمت بازار باید بزرگ‌تر از صفر باشد.")
@@ -395,7 +548,10 @@ class GoldFundStrategyActivity : Activity() {
             premiumPercentile = percentile,
             volume = volume,
             spread = spread,
-            flowPct = flow
+            flowPct = flow,
+            // Manual entries are retained for reference but never qualify
+            // for automatic buy/sell ranking without a verified live snapshot.
+            dataComplete = false
         )
 
         val existingIndex = funds.indexOfFirst {
@@ -443,17 +599,40 @@ class GoldFundStrategyActivity : Activity() {
             return
         }
 
+        val eligibleFunds = funds.filter { it.dataComplete }
+        if (eligibleFunds.isEmpty()) {
+            resultArea.addView(card().apply {
+                addView(label("فعلاً هیچ صندوقی داده کامل ندارد؛ رتبه‌بندی و سیگنال صادر نشد.", 15, true))
+                addView(label(
+                    "برای تحلیل، بازده‌های NAV، درصدک ۶۰روزه، ارزش معاملات و اسپرد باید با داده واقعی تکمیل شوند. جریان واقعی صدور/ابطال هنوز منبع تأییدشده ندارد و در شرط تکمیل داده و امتیازدهی لحاظ نمی‌شود. خانه‌های خالی را صفر یا مقدار فرضی تلقی نکن.",
+                    12, false
+                ))
+            }, matchWrap())
+            return
+        }
+        if (eligibleFunds.size < 5) {
+            resultArea.addView(card().apply {
+                addView(label("تعداد صندوق‌های دارای داده کامل برای رتبه‌بندی کافی نیست؛ فعلاً سیگنال صادر نمی‌شود.", 15, true))
+                addView(label(
+                    "حداقل ۵ صندوق با داده معتبر و تازه لازم است تا مقایسه نسبی و رتبه‌بندی معنا داشته باشد. اکنون فقط ${eligibleFunds.size} صندوق واجد شرایط است.",
+                    12, false
+                ))
+            }, matchWrap())
+            return
+        }
+
         val performanceRanks = rankScores(
-            funds.associate { it.name to it.mediumReturn }, true
+            eligibleFunds.associate { it.name to it.mediumReturn }, true
         )
         val momentumRanks = rankScores(
-            funds.associate { it.name to it.r5 }, true
+            eligibleFunds.associate { it.name to it.r5 }, true
         )
-        val volumeRanks = rankScores(funds.associate { it.name to it.volume }, true)
-        val spreadRanks = rankScores(funds.associate { it.name to it.spread }, false)
-        val flowRanks = rankScores(funds.associate { it.name to it.flowPct }, true)
+        val volumeRanks = rankScores(eligibleFunds.associate { it.name to it.volume }, true)
+        val spreadRanks = rankScores(eligibleFunds.associate { it.name to it.spread }, false)
+        // Subscription/redemption cash flow is intentionally excluded until a verified
+        // per-fund daily numeric source is integrated. TSETMC retail flow is a different metric.
 
-        val scored = funds.map { f ->
+        val scored = eligibleFunds.map { f ->
             val premiumScore = when {
                 f.premiumPercentile <= 10.0 -> 30.0
                 f.premiumPercentile <= 25.0 -> 24.0
@@ -467,11 +646,13 @@ class GoldFundStrategyActivity : Activity() {
             val liquidityScore =
                 ((volumeRanks[f.name] ?: 0.0) * 0.5 +
                     (spreadRanks[f.name] ?: 0.0) * 0.5) * 0.15
-            val flowScore = (flowRanks[f.name] ?: 0.0) * 0.10
-            val total = premiumScore + performanceScore +
-                momentumScore + liquidityScore + flowScore
+            // Available-factor score is normalized to 100; no synthetic zero is assigned to missing flow.
+            val flowScore = 0.0
+            val total = (premiumScore + performanceScore +
+                momentumScore + liquidityScore) * (100.0 / 90.0)
 
             val action = when {
+                !f.dataComplete -> "داده ناقص؛ بدون سیگنال خرید/فروش"
                 f.premiumPercentile <= 25.0 &&
                     total >= 80.0 &&
                     (momentumRanks[f.name] ?: 0.0) >= 50.0 &&
@@ -493,6 +674,12 @@ class GoldFundStrategyActivity : Activity() {
             )
         }.sortedByDescending { it.score }
 
+        val buyCandidates = scored.filter { it.action == "نامزد بررسی خرید" }
+        val firstBuyName = buyCandidates.getOrNull(0)?.fund?.name
+        val secondBuyName = buyCandidates.getOrNull(1)?.fund?.name
+        val buyBudgetPerFund = 200_000_000.0
+        val secondBudgetPerFund = 100_000_000.0
+
         val explanation = card()
         explanation.addView(label("نتیجه تحلیل", 18, true))
         explanation.addView(label(
@@ -500,11 +687,11 @@ class GoldFundStrategyActivity : Activity() {
             12, false
         ))
         explanation.addView(label(
-            "امتیاز کل = حباب تاریخی ۳۰ + بازده نسبی ۱۵/۳۰ روزه ۲۵ + مومنتوم ۵ روزه ۲۰ + نقدشوندگی ۱۵ + جریان پول ۱۰.",
+            "امتیاز کل از حباب تاریخی، بازده ۱۵/۳۰روزه، مومنتوم ۵روزه و نقدشوندگی محاسبه می‌شود. خالص خرید حقیقی معاملات ثانویه جداگانه نمایش داده می‌شود؛ جریان نقدی صدور/ابطال منبع تأییدشده ندارد و در امتیاز وارد نمی‌شود.",
             12, false
         ))
         explanation.addView(label(
-            "سیگنال‌ها فقط نامزد بررسی‌اند؛ پیش از سفارش باید زمان NAV، ترکیب دارایی صندوق‌ها، قیمت قابل اجرا، کارمزد، صف و لغزش قیمت بررسی شود.",
+            "دستور خرید محافظه‌کارانه در این نسخه: نامزد رتبه اول حداکثر ۲۰۰ میلیون و نامزد رتبه دوم حداکثر ۱۰۰ میلیون تومان بودجه دارد؛ سایر نامزدها فعلاً بودجه خرید ندارند. خرید فقط با سفارش محدود در قیمت حداکثر NAV مجاز است. این قاعده یک فیلتر محافظه‌کارانه است، نه پیش‌بینی کف قیمت. برای دستور فروش عددی، ثبت تعداد واحد و قیمت تمام‌شده دارایی کاربر لازم است و در این نسخه موجود نیست.",
             12, false
         ))
         resultArea.addView(explanation, matchWrap())
@@ -530,7 +717,11 @@ class GoldFundStrategyActivity : Activity() {
                 12, false
             ))
             c.addView(label(
-                "نقدشوندگی: ${fmt(item.liquidityScore)} از ۱۵ | جریان پول: ${fmt(item.flowScore)} از ۱۰",
+                "نقدشوندگی: ${fmt(item.liquidityScore)} از ۱۵",
+                12, false
+            ))
+            c.addView(label(
+                "خالص خرید حقیقی معاملات ثانویه: ${f.netRealFlowToman?.let { fmt(it) + " تومان" } ?: "داده پیدا نشد"} | در امتیاز لحاظ نشده",
                 12, false
             ))
             c.addView(label(item.action, 14, true).apply {
@@ -541,13 +732,64 @@ class GoldFundStrategyActivity : Activity() {
                 )
                 setPadding(0, dp(5), 0, 0)
             })
+            val technicalLevels = f.insCode?.let { code ->
+                GoldFundTradeLevels.calculate(
+                    f.price,
+                    GoldFundHistoryStore(this).latestClosingPrices(code, 60)
+                )
+            }
+            val buyLevelsText = technicalLevels?.let { levels ->
+                "سطوح مخصوص سناریوی خرید: ورود اول ${fmt(levels.entry1)}، ورود دوم ${fmt(levels.entry2)}، حد ضرر ${fmt(levels.stopLoss)}، هدف اول ${fmt(levels.target1)} و هدف دوم ${fmt(levels.target2)} تومان. این سطوح تخمینی‌اند و هنوز بک‌تست نشده‌اند."
+            } ?: "سطوح ورود صادر نشد: حداقل ۲۰ قیمت پایانی معتبر یا نوسان کافی در تاریخچه موجود نیست."
+            // For an exit signal, never expose buy-entry levels. Offer an immediate
+            // first-stage exit at the current quote and a second stage only if the
+            // 20-session resistance is above the current price.
+            val exitLevelsText = technicalLevels?.let { levels ->
+                if (levels.resistance20 > f.price) {
+                    "نقطه خروج اول: قیمت فعلی ${fmt(f.price)} تومان؛ نقطه خروج دوم: مقاومت ۲۰روزه ${fmt(levels.resistance20)} تومان. این‌ها سطوح پیشنهادی خروج پله‌ای‌اند، نه تضمین اجرای سفارش."
+                } else {
+                    "نقطه خروج: قیمت فعلی ${fmt(f.price)} تومان. مقاومت ۲۰روزه بالاتر از قیمت فعلی نیست؛ بنابراین هدف خروج دومِ بالاتر صادر نشد."
+                }
+            } ?: "نقطه خروج عددی صادر نشد؛ تاریخچه معتبر کافی برای محاسبه مقاومت وجود ندارد. وضعیت خروج را با قیمت روز بررسی کن."
+            val instruction = when (item.action) {
+                "نامزد بررسی خرید" -> {
+                    val maxEntry = f.nav
+                    val assignedBudget = when (f.name) {
+                        firstBuyName -> buyBudgetPerFund
+                        secondBuyName -> secondBudgetPerFund
+                        else -> 0.0
+                    }
+                    val units = if (assignedBudget > 0.0) (assignedBudget / f.price).toLong() else 0L
+                    if (assignedBudget <= 0.0) {
+                        "دستورالعمل شما: این صندوق نامزد خرید است، اما در بودجه فعلی جایگاه اول یا دوم را ندارد؛ فعلاً برای آن خرید نکنید."
+                    } else if (f.price <= maxEntry) {
+                        "دستورالعمل شما: جایگاه ${if (f.name == firstBuyName) "اول" else "دوم"} خرید؛ سقف بودجه ${fmt(assignedBudget)} تومان، حدود ${NumberFormat.getNumberInstance(Locale("fa", "IR")).format(units)} واحد با قیمت فعلی. فقط سفارش محدود و حداکثر تا NAV یعنی ${fmt(maxEntry)} تومان. $buyLevelsText تا وقتی قیمت به محدوده ورود اول/دوم نرسیده خرید تعقیبی نکنید؛ پس از ورود، حد ضرر و اهداف را با داده تازه کنترل کنید. این سطوح هنوز آزمون تاریخی نشده‌اند."
+                    } else {
+                        "دستورالعمل شما: فعلاً خرید نکنید. قیمت بازار ${fmt(f.price)} تومان و بالاتر از NAV ${fmt(f.nav)} تومان است. این صندوق فقط نامزد است؛ تا زمانی که قیمت به NAV یا پایین‌تر نرسیده و سیگنال با داده تازه برقرار نمانده، سفارش خرید نگذارید."
+                    }
+                }
+                "نامزد بررسی فروش/خروج" -> "دستورالعمل شما: خرید جدید را متوقف کنید. $exitLevelsText تعداد واحد و قیمت تمام‌شده دارایی شما در برنامه ثبت نشده؛ بنابراین این نقاط، خروج پله‌ای پیشنهادی‌اند و دستور فروش قطعی شخصی‌سازی‌شده نیستند."
+                else -> "دستورالعمل شما: فعلاً معامله جدید انجام ندهید. منتظر دریافت داده تازه و تغییر وضعیت سیگنال بمانید."
+            }
+            c.addView(label(instruction, 13, true).apply {
+                setTextColor(if (item.action == "نامزد بررسی خرید") green
+                    else if (item.action.contains("فروش")) red else ink)
+                setPadding(0, dp(7), 0, dp(3))
+            })
+            when (item.action) {
+                "نامزد بررسی خرید" -> c.addView(label(buyLevelsText, 12, technicalLevels != null).apply {
+                    setPadding(0, dp(5), 0, dp(3))
+                })
+                "نامزد بررسی فروش/خروج" -> c.addView(label(exitLevelsText, 12, technicalLevels != null).apply {
+                    setPadding(0, dp(5), 0, dp(3))
+                })
+                // Watch / no-trade cards intentionally show no entry or exit prices.
+            }
             resultArea.addView(c, matchWrap())
         }
 
         val allocation = card()
         allocation.addView(label("مدیریت سرمایه ۵۰۰ میلیون تومانی", 17, true))
-        val buyCandidates = scored.filter { it.action == "نامزد بررسی خرید" }
-
         allocation.addView(label(
             if (buyCandidates.isEmpty()) {
                 "در حال حاضر هیچ صندوقی تمام شروط اولیه ورود را ندارد؛ طبق استراتژی، وجه نقد حفظ شود و معامله‌ای انجام نشود."
@@ -602,7 +844,11 @@ class GoldFundStrategyActivity : Activity() {
             }
 
             row.addView(label(
-                "${fund.name} | ${fund.asOf} | حباب ${fmt(fund.premium)}٪ | درصدک ${fmt(fund.premiumPercentile)}",
+                if (fund.dataComplete) {
+                    "${fund.name} | ${fund.asOf} | حباب ${fmt(fund.premium)}٪ | درصدک ${fmt(fund.premiumPercentile)} | خالص خرید حقیقی ${fund.netRealFlowToman?.let { fmt(it) + " تومان" } ?: "ناموجود"}"
+                } else {
+                    "${fund.name} | ${fund.asOf} | داده ناقص؛ فعلاً بدون رتبه و سیگنال"
+                },
                 12, true
             ), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
@@ -637,6 +883,9 @@ class GoldFundStrategyActivity : Activity() {
                 put("volume", f.volume)
                 put("spread", f.spread)
                 put("flowPct", f.flowPct)
+                if (f.netRealFlowToman != null) put("netRealFlowToman", f.netRealFlowToman) else put("netRealFlowToman", JSONObject.NULL)
+                put("dataComplete", f.dataComplete)
+                put("insCode", f.insCode ?: "")
             })
         }
         prefs.edit().putString("funds", array.toString()).apply()
@@ -660,7 +909,12 @@ class GoldFundStrategyActivity : Activity() {
                     o.getDouble("premiumPercentile"),
                     o.getDouble("volume"),
                     o.getDouble("spread"),
-                    o.getDouble("flowPct")
+                    o.getDouble("flowPct"),
+                    // Saved snapshots must be refreshed and re-imported
+                    // after app restart before they can produce a signal.
+                    false,
+                    if (o.isNull("netRealFlowToman")) null else o.optDouble("netRealFlowToman").takeIf { it.isFinite() },
+                    o.optString("insCode").takeIf { it.isNotBlank() }
                 ))
             }
         } catch (_: Exception) {

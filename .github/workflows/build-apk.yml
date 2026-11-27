@@ -2,13 +2,17 @@ name: Build Android Release APK
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - main
   push:
     branches:
       - main
+      - fix/auto-fund-data-completion
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -19,8 +23,17 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+          cache-disabled: false
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
+
+      - name: Run unit tests
+        run: gradle --no-daemon test
 
       - name: Prepare release signing key
         env:
