@@ -23,6 +23,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+          cache-disabled: false
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
