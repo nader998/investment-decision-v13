@@ -543,27 +543,35 @@ class GoldFundAutoDataActivity : Activity() {
             val historyUrl = candidate.first.trimEnd('/') + "/history"
             val html = try { downloadHtml(historyUrl) } catch (_: Exception) { continue }
             val doc = Jsoup.parse(html, historyUrl)
-            val table = doc.select("table").firstOrNull { t ->
-                val heads = t.select("tr").firstOrNull()?.select("th,td")?.map {
-                    it.text().replace("\\u200c", " ").replace(Regex("\\s+"), " ").trim()
-                } ?: emptyList()
-                heads.size >= 3 && heads.any { it.contains("تاریخ") } &&
-                    heads.any { it.contains("NAV تعدیل") || it.contains("NAV ابطال") } &&
-                    heads.any { it.contains("قیمت پایانی") }
+            // Some Bourseeye pages prepend an empty/chart row before the
+            // actual history headings. Search the first rows instead of assuming
+            // the first <tr> is the header.
+            val tableAndHeader = doc.select("table").firstNotNullOfOrNull { t ->
+                val rows = t.select("tr")
+                val headerIndex = rows.indexOfFirst { row ->
+                    val cells = row.select("th,td").map {
+                        it.text().replace("\\u200c", " ").replace(Regex("\\s+"), " ").trim()
+                    }
+                    cells.size >= 3 && cells.any { it.contains("تاریخ") } &&
+                        cells.any { it.contains("NAV تعدیل") || it.contains("NAV ابطال") } &&
+                        cells.any { it.contains("قیمت پایانی") }
+                }
+                if (headerIndex >= 0) t to headerIndex else null
             } ?: continue
-
-            val header = table.select("tr").first().select("th,td").map {
+            val table = tableAndHeader.first
+            val headerRowIndex = tableAndHeader.second
+            val tableRows = table.select("tr")
+            val header = tableRows[headerRowIndex].select("th,td").map {
                 it.text().replace("\\u200c", " ").replace(Regex("\\s+"), " ").trim()
             }
             val dateIndex = header.indexOfFirst { it.contains("تاریخ") }
             val navIndex = header.indexOfFirst { it.contains("NAV تعدیل") }
                 .takeIf { it >= 0 } ?: header.indexOfFirst { it.contains("NAV ابطال") }
             val closeIndex = header.indexOfFirst { it.contains("قیمت پایانی") }
-            if (dateIndex < 0) continue
-            if (navIndex < 0 || closeIndex < 0) continue
+            if (dateIndex < 0 || navIndex < 0 || closeIndex < 0) continue
 
             var saved = 0
-            table.select("tr").drop(1).forEach { row ->
+            tableRows.drop(headerRowIndex + 1).forEach { row ->
                 val cells = row.select("td,th").map { it.text().trim() }
                 if (cells.size <= maxOf(dateIndex, navIndex, closeIndex)) return@forEach
                 val dateKey = parseBourseeyeJalaliDate(cells[dateIndex]) ?: return@forEach
