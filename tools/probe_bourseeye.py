@@ -1,72 +1,163 @@
+import json
 import re
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
 BASE = "https://bourseeye.com"
+TSETMC = "https://cdn.tsetmc.com"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/json,*/*;q=0.8",
     "Accept-Language": "fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7",
 }
 session = requests.Session()
 session.headers.update(HEADERS)
 
 def norm(value):
-    return re.sub(r"\s+", " ", value or "").strip()
+    value = str(value or "").translate(str.maketrans({
+        "ي":"ی", "ك":"ک", "ۀ":"ه", "ة":"ه", "أ":"ا", "إ":"ا",
+        "ؤ":"و", "‌":"", "ـ":""
+    }))
+    value = re.sub(r"[\u064b-\u065f\u0670]", "", value)
+    return re.sub(r"[^\w\u0600-\u06ff]+", "", value).lower()
+
+def strings(obj, keys):
+    out = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k in keys and isinstance(v, (str, int, float)):
+                out.append(str(v))
+            elif isinstance(v, (dict, list)):
+                out.extend(strings(v, keys))
+    elif isinstance(obj, list):
+        for v in obj:
+            out.extend(strings(v, keys))
+    return out
+
+def score_match(left, right):
+    a, b = norm(left), norm(right)
+    if not a or not b:
+        return 0
+    if a == b:
+        return 100
+    if len(a) >= 4 and len(b) >= 4 and (a in b or b in a):
+        return 88
+    # Token overlap after retaining Persian/Latin letters and digits.
+    ta = {x for x in re.findall(r"[\w\u0600-\u06ff]{3,}", str(left).lower())}
+    tb = {x for x in re.findall(r"[\w\u0600-\u06ff]{3,}", str(right).lower())}
+    if ta and tb:
+        return int(100 * len(ta & tb) / len(ta))
+    return 0
 
 def main():
-    response = session.get(BASE + "/funds/gold", timeout=(20, 45))
-    print(f"LIST_HTTP={response.status_code}; FINAL_URL={response.url}; BYTES={len(response.content)}")
-    response.raise_for_status()
-    soup = BeautifulSoup(response.text, "html.parser")
+    # Pull the same commodity-fund universe used by the Android application.
+    api = session.get(TSETMC + "/api/ClosingPrice/GetTradeTop/CommodityFund/0/9999", timeout=(20,45))
+    print(f"TSETMC_LIST_HTTP={api.status_code}; BYTES={len(api.content)}")
+    api.raise_for_status()
+    root = api.json()
+    rows = []
+    def find_rows(value):
+        if isinstance(value, dict):
+            for k, v in value.items():
+                if k in ("tradeTop", "funds") and isinstance(v, list):
+                    rows.extend(v)
+                elif isinstance(v, (dict, list)):
+                    find_rows(v)
+        elif isinstance(value, list):
+            for v in value:
+                find_rows(v)
+    find_rows(root)
+    funds = {}
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        inst = item.get("instrument") if isinstance(item.get("instrument"), dict) else item
+        code = str(inst.get("insCode") or inst.get("inscode") or item.get("insCode") or item.get("inscode") or "")
+        if not code:
+            continue
+        symbol = str(inst.get("lVal18AFC") or inst.get("symbol") or item.get("lVal18AFC") or item.get("symbol") or "")
+        name = str(inst.get("lVal30") or inst.get("name") or item.get("lVal30") or item.get("name") or symbol)
+        funds[code] = {"code":code, "symbol":symbol, "name":name}
+    print(f"TSETMC_COMMODITY_FUNDS={len(funds)}")
+    if not funds:
+        print("TSETMC_RESPONSE_SAMPLE=" + json.dumps(root, ensure_ascii=False)[:2500])
+        raise RuntimeError("No usable instruments in TSETMC response")
+
+    listing = session.get(BASE + "/funds/gold", timeout=(20,45))
+    print(f"BOURSEEYE_LIST_HTTP={listing.status_code}; BYTES={len(listing.content)}; URL={listing.url}")
+    listing.raise_for_status()
+    soup = BeautifulSoup(listing.text, "html.parser")
     found = {}
     for a in soup.select("a[href]"):
         url = urljoin(BASE, a.get("href", ""))
         match = re.search(r"/funds/(\d+)/([^/?#]+)", url)
         if match:
-            found.setdefault(match.group(1), (match.group(2), norm(a.get_text(" ", strip=True))))
-    print(f"FUND_LINKS={len(found)}")
-    if not found:
-        print("TITLE=" + norm(soup.title.get_text(" ", strip=True) if soup.title else "NO_TITLE"))
-        print("BODY=" + norm(soup.get_text(" ", strip=True))[:1500])
-        print("ANCHOR_SAMPLE=" + repr([a.get("href") for a in soup.select("a[href]")[:80]]))
-        print("HTML_FUND_OCCURRENCES=" + str(response.text.count("/funds/")))
-        for match in list(dict.fromkeys(re.findall(r".{0,100}/funds/.{0,180}", response.text)))[:30]:
-            print("HTML_FUND_CONTEXT=" + norm(match))
-        scripts = [urljoin(BASE, s.get("src", "")) for s in soup.select("script[src]")]
-        print("SCRIPTS=" + repr(scripts))
-        return
+            found.setdefault(match.group(1), {"slug":match.group(2), "label":a.get_text(" ", strip=True), "url":url})
+    print(f"BOURSEEYE_FUND_LINKS={len(found)}")
 
-    validated = 0
-    for fid, (slug, label) in sorted(found.items()):
-        url = f"{BASE}/funds/{fid}/{slug}/history"
+    # Validate the live history table structurally and by actual numeric paired rows.
+    page_data = {}
+    for fid, item in sorted(found.items()):
+        url = item["url"].rstrip("/") + "/history"
         try:
-            r = session.get(url, timeout=(20, 45))
+            r = session.get(url, timeout=(20,45))
             r.raise_for_status()
             page = BeautifulSoup(r.text, "html.parser")
-            tables = page.select("table")
-            history_table = None
-            for table in tables:
-                rows = table.select("tr")
-                headers = [norm(c.get_text(" ", strip=True)) for c in (rows[0].select("th,td") if rows else [])]
-                if len(headers) >= 5 and "تاریخ" in headers[0] and any("NAV" in h for h in headers):
-                    history_table = (headers, rows)
-                    break
-            if history_table:
-                headers, rows = history_table
-                data_rows = []
-                for row in rows[1:]:
-                    cells = [norm(c.get_text(" ", strip=True)) for c in row.select("th,td")]
-                    if cells:
-                        data_rows.append(cells)
-                validated += 1
-                print(f"FUND={fid}; name={label}; HTTP={r.status_code}; HISTORY_ROWS={len(data_rows)}; HEADERS={headers}; SAMPLE={data_rows[:3]}")
-            else:
-                print(f"FUND={fid}; name={label}; HTTP={r.status_code}; HISTORY_TABLE=NOT_FOUND; TABLES={len(tables)}; TEXT={norm(page.get_text(' ', strip=True))[:250]}")
+            result = {"http":r.status_code, "rows":0, "valid_pairs":0, "headers":[], "url":url}
+            for table in page.select("table"):
+                trs = table.select("tr")
+                if not trs:
+                    continue
+                headers = [re.sub(r"\s+"," ",c.get_text(" ",strip=True)).strip() for c in trs[0].select("th,td")]
+                date_i = next((i for i,h in enumerate(headers) if "تاریخ" in h), -1)
+                nav_i = next((i for i,h in enumerate(headers) if "NAV تعدیل" in h), -1)
+                if nav_i < 0:
+                    nav_i = next((i for i,h in enumerate(headers) if "NAV ابطال" in h), -1)
+                close_i = next((i for i,h in enumerate(headers) if "قیمت پایانی" in h), -1)
+                if min(date_i,nav_i,close_i) < 0:
+                    continue
+                valid = 0
+                data_count = 0
+                for tr in trs[1:]:
+                    cells = [c.get_text(" ",strip=True) for c in tr.select("td,th")]
+                    if len(cells) <= max(date_i,nav_i,close_i):
+                        continue
+                    data_count += 1
+                    def number(x):
+                        x = str(x).translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٬٫", "0123456789,."))
+                        x = re.sub(r"[^0-9.]", "", x)
+                        try: return float(x) if x else None
+                        except: return None
+                    if re.search(r"\d{4}", cells[date_i]) and (number(cells[nav_i]) or 0) > 0 and (number(cells[close_i]) or 0) > 0:
+                        valid += 1
+                result.update(rows=data_count, valid_pairs=valid, headers=headers)
+                break
+            page_data[fid] = result
+            print(f"HISTORY fid={fid}; label={item['label']}; HTTP={result['http']}; ROWS={result['rows']}; VALID_PRICE_NAV_PAIRS={result['valid_pairs']}; HEADERS={result['headers']}")
         except Exception as exc:
-            print(f"FUND={fid}; name={label}; ERROR={type(exc).__name__}:{exc}")
-    print(f"HISTORY_VALIDATED={validated}/{len(found)}")
+            page_data[fid] = {"http":"ERROR","rows":0,"valid_pairs":0,"headers":[],"url":url}
+            print(f"HISTORY fid={fid}; label={item['label']}; ERROR={type(exc).__name__}:{exc}")
+
+    # Conservative one-to-one name mapping: no automatic acceptance of ambiguous matches.
+    unmatched = []
+    mapped = set()
+    for fund in funds.values():
+        ranked = sorted(((max(score_match(fund["name"], p["label"]), score_match(fund["symbol"], p["label"])), fid, p)
+                         for fid,p in found.items()), reverse=True, key=lambda x:x[0])
+        best = ranked[0] if ranked else (0,None,None)
+        second = ranked[1][0] if len(ranked)>1 else 0
+        if best[0] >= 65 and best[0] > second:
+            fid, p = best[1], best[2]
+            mapped.add(fid)
+            stats = page_data.get(fid,{})
+            print(f"MAP symbol={fund['symbol']}; name={fund['name']}; score={best[0]}; bourseeye={p['label']}; rows={stats.get('rows',0)}; valid_pairs={stats.get('valid_pairs',0)}")
+        else:
+            unmatched.append(fund)
+            print(f"UNMATCHED symbol={fund['symbol']}; name={fund['name']}; best_score={best[0]}; runner_up={second}")
+    print(f"SUMMARY TSETMC={len(funds)} BOURSEEYE={len(found)} MAPPED={len(mapped)} UNMATCHED={len(unmatched)}")
+    print(f"SUMMARY_HISTORY_PAGES_WITH_60_VALID_PAIRS={sum(1 for x in page_data.values() if x.get('valid_pairs',0)>=60)}/{len(page_data)}")
+    print(f"SUMMARY_HISTORY_PAGES_WITH_ANY_VALID_PAIRS={sum(1 for x in page_data.values() if x.get('valid_pairs',0)>0)}/{len(page_data)}")
 
 if __name__ == "__main__":
     main()
