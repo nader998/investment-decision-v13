@@ -517,23 +517,29 @@ class GoldFundAutoDataActivity : Activity() {
             val html = try { downloadHtml(historyUrl) } catch (_: Exception) { continue }
             val doc = Jsoup.parse(html, historyUrl)
             val table = doc.select("table").firstOrNull { t ->
-                val heads = t.select("tr").firstOrNull()?.select("th,td")?.map { it.text() } ?: emptyList()
-                heads.size >= 5 && heads[0].contains("تاریخ") &&
+                val heads = t.select("tr").firstOrNull()?.select("th,td")?.map {
+                    it.text().replace("\\u200c", " ").replace(Regex("\\s+"), " ").trim()
+                } ?: emptyList()
+                heads.size >= 3 && heads.any { it.contains("تاریخ") } &&
                     heads.any { it.contains("NAV تعدیل") || it.contains("NAV ابطال") } &&
                     heads.any { it.contains("قیمت پایانی") }
             } ?: continue
 
-            val header = table.select("tr").first().select("th,td").map { it.text().trim() }
+            val header = table.select("tr").first().select("th,td").map {
+                it.text().replace("\\u200c", " ").replace(Regex("\\s+"), " ").trim()
+            }
+            val dateIndex = header.indexOfFirst { it.contains("تاریخ") }
             val navIndex = header.indexOfFirst { it.contains("NAV تعدیل") }
                 .takeIf { it >= 0 } ?: header.indexOfFirst { it.contains("NAV ابطال") }
             val closeIndex = header.indexOfFirst { it.contains("قیمت پایانی") }
+            if (dateIndex < 0) continue
             if (navIndex < 0 || closeIndex < 0) continue
 
             var saved = 0
             table.select("tr").drop(1).forEach { row ->
                 val cells = row.select("td,th").map { it.text().trim() }
-                if (cells.size <= maxOf(navIndex, closeIndex)) return@forEach
-                val dateKey = parseBourseeyeJalaliDate(cells[0]) ?: return@forEach
+                if (cells.size <= maxOf(dateIndex, navIndex, closeIndex)) return@forEach
+                val dateKey = parseBourseeyeJalaliDate(cells[dateIndex]) ?: return@forEach
                 val nav = parsePersianToman(cells[navIndex]) ?: return@forEach
                 val close = parsePersianToman(cells[closeIndex]) ?: return@forEach
                 if (nav > 0.0 && close > 0.0) {
@@ -543,6 +549,7 @@ class GoldFundAutoDataActivity : Activity() {
             }
             if (saved > 0) return saved
         }
+        return 0
     }
 
     private fun downloadHtml(address: String): String {
