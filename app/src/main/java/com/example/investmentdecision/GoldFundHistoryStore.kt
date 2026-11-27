@@ -94,7 +94,7 @@ class GoldFundHistoryStore(context: Context) :
         readableDatabase.rawQuery(
             """
             SELECT close_toman FROM daily_history
-            WHERE ins_code = ? AND close_toman > 0 AND nav_toman > 0
+            WHERE ins_code = ? AND close_toman > 0
             ORDER BY trade_date DESC LIMIT ?
             """.trimIndent(),
             arrayOf(insCode, limit.coerceIn(1, 120).toString())
