@@ -662,8 +662,10 @@ class GoldFundStrategyActivity : Activity() {
         }.sortedByDescending { it.score }
 
         val buyCandidates = scored.filter { it.action == "نامزد بررسی خرید" }
-        val buyBudgetPerFund = if (buyCandidates.isEmpty()) 0.0 else 200_000_000.0 / buyCandidates.size
-        val secondBudgetPerFund = if (buyCandidates.isEmpty()) 0.0 else 100_000_000.0 / buyCandidates.size
+        val firstBuyName = buyCandidates.getOrNull(0)?.fund?.name
+        val secondBuyName = buyCandidates.getOrNull(1)?.fund?.name
+        val buyBudgetPerFund = 200_000_000.0
+        val secondBudgetPerFund = 100_000_000.0
 
         val explanation = card()
         explanation.addView(label("نتیجه تحلیل", 18, true))
@@ -676,7 +678,7 @@ class GoldFundStrategyActivity : Activity() {
             12, false
         ))
         explanation.addView(label(
-            "دستور خرید محافظه‌کارانه در این نسخه: ورود فقط با قیمت بازار برابر یا کمتر از NAV و سفارش محدود؛ بودجه مرحله اول ۲۰۰ میلیون و مرحله دوم ۱۰۰ میلیون تومان بین نامزدها تقسیم می‌شود. مرحله دوم فقط با تأیید دوباره سیگنال پس از داده تازه مجاز است. حد قیمتی فروش از روی قیمت لحظه‌ای قابل تضمین نیست؛ برای فروش پله‌ای از سفارش محدود استفاده شود.",
+            "دستور خرید محافظه‌کارانه در این نسخه: نامزد رتبه اول حداکثر ۲۰۰ میلیون و نامزد رتبه دوم حداکثر ۱۰۰ میلیون تومان بودجه دارد؛ سایر نامزدها فعلاً بودجه خرید ندارند. خرید فقط با سفارش محدود در قیمت حداکثر NAV مجاز است. این قاعده یک فیلتر محافظه‌کارانه است، نه پیش‌بینی کف قیمت. برای دستور فروش عددی، ثبت تعداد واحد و قیمت تمام‌شده دارایی کاربر لازم است و در این نسخه موجود نیست.",
             12, false
         ))
         resultArea.addView(explanation, matchWrap())
@@ -720,15 +722,21 @@ class GoldFundStrategyActivity : Activity() {
             val instruction = when (item.action) {
                 "نامزد بررسی خرید" -> {
                     val maxEntry = f.nav
-                    val units = if (buyBudgetPerFund > 0.0) (buyBudgetPerFund / f.price).toLong() else 0L
-                    val secondUnits = if (secondBudgetPerFund > 0.0) (secondBudgetPerFund / f.price).toLong() else 0L
-                    if (f.price <= maxEntry) {
-                        "دستورالعمل شما: خرید مرحله اول حداکثر ${fmt(buyBudgetPerFund)} تومان، حدود ${NumberFormat.getNumberInstance(Locale("fa", "IR")).format(units)} واحد؛ سفارش محدود با قیمت حداکثر NAV یعنی ${fmt(maxEntry)} تومان. مرحله دوم حداکثر ${fmt(secondBudgetPerFund)} تومان (حدود ${NumberFormat.getNumberInstance(Locale("fa", "IR")).format(secondUnits)} واحد) فقط پس از دریافت داده تازه و باقی‌ماندن سیگنال خرید. اگر قیمت از NAV بالاتر رفت یا داده ناقص/قدیمی شد، خرید نکنید."
+                    val assignedBudget = when (f.name) {
+                        firstBuyName -> buyBudgetPerFund
+                        secondBuyName -> secondBudgetPerFund
+                        else -> 0.0
+                    }
+                    val units = if (assignedBudget > 0.0) (assignedBudget / f.price).toLong() else 0L
+                    if (assignedBudget <= 0.0) {
+                        "دستورالعمل شما: این صندوق نامزد خرید است، اما در بودجه فعلی جایگاه اول یا دوم را ندارد؛ فعلاً برای آن خرید نکنید."
+                    } else if (f.price <= maxEntry) {
+                        "دستورالعمل شما: جایگاه ${if (f.name == firstBuyName) "اول" else "دوم"} خرید. سقف بودجه این موقعیت ${fmt(assignedBudget)} تومان، حدود ${NumberFormat.getNumberInstance(Locale("fa", "IR")).format(units)} واحد. فقط سفارش محدود با قیمت حداکثر NAV یعنی ${fmt(maxEntry)} تومان بگذارید. این سقف یک قاعده محافظه‌کارانه بر مبنای NAV است، نه پیش‌بینی تضمینی کف قیمت. مرحله دوم فقط پس از دریافت داده تازه و باقی‌ماندن سیگنال خرید انجام شود؛ اگر قیمت از NAV بالاتر رفت یا داده ناقص/قدیمی شد، خرید نکنید."
                     } else {
                         "دستورالعمل شما: فعلاً خرید نکنید. قیمت بازار ${fmt(f.price)} تومان و بالاتر از NAV ${fmt(f.nav)} تومان است. این صندوق فقط نامزد است؛ تا زمانی که قیمت به NAV یا پایین‌تر نرسیده و سیگنال با داده تازه برقرار نمانده، سفارش خرید نگذارید."
                     }
                 }
-                "نامزد بررسی فروش/خروج" -> "دستورالعمل شما: اگر این صندوق را دارید، خرید جدید را متوقف کنید و برای کاهش ریسک، ابتدا ۵۰٪ از تعداد واحدهای خود را با سفارش محدود و نزدیک قیمت قابل معامله بازار عرضه کنید. پس از به‌روزرسانی بعدی، در صورت تداوم سیگنال فروش درباره باقیمانده تصمیم بگیرید. اگر این صندوق را ندارید، خرید نکنید. برنامه تعداد واحد قابل فروش را نمی‌داند چون موجودی شما در برنامه ثبت نشده است."
+                "نامزد بررسی فروش/خروج" -> "دستورالعمل شما: اگر این صندوق را دارید، فعلاً خرید جدید را متوقف کنید. این وضعیت فقط نامزد بررسی خروج است و فروش قطعی نیست؛ برنامه موجودی و قیمت تمام‌شده شما را ندارد، بنابراین درصد یا تعداد فروش و حد قیمت شخصی تعیین نمی‌کند. تا ثبت موجودی و تأیید سیگنال فروش، دستور فروش عددی صادر نمی‌شود. اگر این صندوق را ندارید، خرید نکنید."
                 else -> "دستورالعمل شما: فعلاً معامله جدید انجام ندهید. منتظر دریافت داده تازه و تغییر وضعیت سیگنال بمانید."
             }
             c.addView(label(instruction, 13, true).apply {
