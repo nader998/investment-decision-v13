@@ -775,7 +775,7 @@ class GoldFundStrategyActivity : Activity() {
 
             row.addView(label(
                 if (fund.dataComplete) {
-                    "${fund.name} | ${fund.asOf} | حباب ${fmt(fund.premium)}٪ | درصدک ${fmt(fund.premiumPercentile)}"
+                    "${fund.name} | ${fund.asOf} | حباب ${fmt(fund.premium)}٪ | درصدک ${fmt(fund.premiumPercentile)} | خالص خرید حقیقی ${fund.netRealFlowToman?.let { fmt(it) + " تومان" } ?: "ناموجود"}"
                 } else {
                     "${fund.name} | ${fund.asOf} | داده ناقص؛ فعلاً بدون رتبه و سیگنال"
                 },
