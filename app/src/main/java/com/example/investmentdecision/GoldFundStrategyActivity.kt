@@ -313,6 +313,12 @@ class GoldFundStrategyActivity : Activity() {
             Toast.makeText(this, "ابتدا اطلاعات خودکار صندوق‌ها را دریافت کن.", Toast.LENGTH_LONG).show()
             return
         }
+        val savedAt = getSharedPreferences("tsetmc_fund_cache", MODE_PRIVATE)
+            .getLong("saved_at", 0L)
+        if (savedAt <= 0L || System.currentTimeMillis() - savedAt > 6L * 60L * 60L * 1000L) {
+            Toast.makeText(this, "داده ذخیره‌شده قدیمی است؛ ابتدا دریافت خودکار را دوباره اجرا کن.", Toast.LENGTH_LONG).show()
+            return
+        }
 
         val imported = mutableListOf<Fund>()
         var incomplete = 0
