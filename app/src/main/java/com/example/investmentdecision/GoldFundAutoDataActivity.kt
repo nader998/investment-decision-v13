@@ -139,6 +139,10 @@ class GoldFundAutoDataActivity : Activity() {
                     val name = firstString(instrument, "lVal30", "name")
                         ?: firstString(item, "lVal30", "name")
                         ?: symbol
+                    // GetTradeTop/CommodityFund also includes silver and other
+                    // commodity ETFs. Keep this gold-only screen from presenting
+                    // silver instruments as gold funds.
+                    if (!isGoldFundSymbol(symbol)) continue
                     if (candidates.none { it.third == code }) {
                         candidates.add(Triple(symbol, name, code))
                     }
@@ -657,6 +661,17 @@ class GoldFundAutoDataActivity : Activity() {
         }
         if (gm !in 1..12) return null
         return "%04d%02d%02d".format(Locale.ROOT, gy, gm, gd)
+    }
+
+    private fun isGoldFundSymbol(rawSymbol: String): Boolean {
+        val symbol = normalizeFundName(rawSymbol)
+        // Silver-fund tickers in TSETMC's mixed commodity-fund endpoint.
+        // Exclude by instrument symbol, not fund-name similarity.
+        val silverPrefixes = listOf("نقر", "سیلور", "سیمین")
+        if (silverPrefixes.any { symbol.startsWith(it) }) return false
+        // Non-gold precious-metal ticker.
+        if (symbol == "پلاتا") return false
+        return true
     }
 
     private fun normalizeFundName(value: String): String =
