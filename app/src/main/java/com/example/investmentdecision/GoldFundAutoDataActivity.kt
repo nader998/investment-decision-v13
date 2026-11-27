@@ -375,10 +375,14 @@ class GoldFundAutoDataActivity : Activity() {
         }
 
         // Refresh the fund registry on every run; a permanently cached registry can become stale.
-        val downloadedRegistry = findArray(
-            getJson("https://cdn.tsetmc.com/api/Fund/GetFunds/5"),
-            setOf("funds", "fund", "items")
-        )
+        val downloadedRegistry = try {
+            findArray(
+                getJson("https://cdn.tsetmc.com/api/Fund/GetFunds/5"),
+                setOf("funds", "fund", "items")
+            )
+        } catch (_: Exception) {
+            JSONArray()
+        }
         val registry = if (downloadedRegistry.length() > 0) {
             cachePrefs.edit().putString("commodity_funds_registry", downloadedRegistry.toString()).apply()
             downloadedRegistry
@@ -428,8 +432,14 @@ class GoldFundAutoDataActivity : Activity() {
 
         val navByDate = mutableMapOf<String, Double>()
         if (registrationNumber != null) {
-            val detailRoot = getJson("https://cdn.tsetmc.com/api/Fund/GetFundInDetail/$registrationNumber")
-            val stats = findArray(detailRoot, setOf("Stats", "stats", "fundStats"))
+            // A fund-specific TSETMC detail request can return HTTP 400 even when
+            // the fund's Bourseeye history is available. Isolate this source failure.
+            val stats = try {
+                val detailRoot = getJson("https://cdn.tsetmc.com/api/Fund/GetFundInDetail/$registrationNumber")
+                findArray(detailRoot, setOf("Stats", "stats", "fundStats"))
+            } catch (_: Exception) {
+                JSONArray()
+            }
             for (i in 0 until stats.length()) {
                 val row = stats.optJSONObject(i) ?: continue
                 val rawDate = firstString(row, "UpdateGregorianDate", "updateGregorianDate", "date", "dEven")
