@@ -536,7 +536,9 @@ class GoldFundAutoDataActivity : Activity() {
         // Reject ambiguous top matches. A wrong history page is worse than
         // showing "data not found", because it silently corrupts fund returns.
         val bestScore = orderedCandidates.firstOrNull()?.third ?: return 0
-        if (orderedCandidates.count { it.third == bestScore } != 1) return 0
+        val secondBestScore = orderedCandidates.getOrNull(1)?.third ?: 0
+        if (orderedCandidates.count { it.third == bestScore } != 1 ||
+            bestScore - secondBestScore < 10) return 0
         for (candidate in orderedCandidates.take(6)) {
             val historyUrl = candidate.first.trimEnd('/') + "/history"
             val html = try { downloadHtml(historyUrl) } catch (_: Exception) { continue }
