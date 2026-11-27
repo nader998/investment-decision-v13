@@ -589,6 +589,16 @@ class GoldFundStrategyActivity : Activity() {
             }, matchWrap())
             return
         }
+        if (eligibleFunds.size < 5) {
+            resultArea.addView(card().apply {
+                addView(label("تعداد صندوق‌های دارای داده کامل برای رتبه‌بندی کافی نیست؛ فعلاً سیگنال صادر نمی‌شود.", 15, true))
+                addView(label(
+                    "حداقل ۵ صندوق با داده معتبر و تازه لازم است تا مقایسه نسبی و رتبه‌بندی معنا داشته باشد. اکنون فقط ${eligibleFunds.size} صندوق واجد شرایط است.",
+                    12, false
+                ))
+            }, matchWrap())
+            return
+        }
 
         val performanceRanks = rankScores(
             eligibleFunds.associate { it.name to it.mediumReturn }, true
