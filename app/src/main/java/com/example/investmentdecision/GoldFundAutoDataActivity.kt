@@ -276,39 +276,57 @@ class GoldFundAutoDataActivity : Activity() {
 
         val netRealFlow = try {
             val flowRoot = getJson("https://cdn.tsetmc.com/api/ClientType/GetClientTypeHistory/$insCode")
-            val flowRows = findArrayWithFields(
-                flowRoot,
-                setOf("buy_I_Value", "buyIValue", "buy_i_value", "sell_I_Value", "sellIValue", "sell_i_value")
-            ) ?: JSONArray()
+            val flowRows = findArray(flowRoot, setOf("clientType"))
             val latestFlow = (0 until flowRows.length())
                 .mapNotNull { flowRows.optJSONObject(it) }
                 .maxByOrNull { firstNumberIgnoreCase(it, "recDate", "dEven", "date") ?: 0.0 }
-            if (latestFlow == null) null else {
-                val buy = firstNumberIgnoreCase(latestFlow, "buy_I_Value", "buyIValue", "buy_i_value")
-                val sell = firstNumberIgnoreCase(latestFlow, "sell_I_Value", "sellIValue", "sell_i_value")
-                if (buy != null && sell != null) (buy - sell) / 10.0 else null
+            val flowObject = latestFlow ?: run {
+                val snapshotRoot = getJson("https://cdn.tsetmc.com/api/ClientType/GetClientType/$insCode/1/0")
+                findObject(snapshotRoot, "clientType") ?: snapshotRoot
             }
+            val buy = firstNumberIgnoreCase(flowObject, "buy_I_Value")
+            val sell = firstNumberIgnoreCase(flowObject, "sell_I_Value")
+            if (buy != null && sell != null) (buy - sell) / 10.0 else null
         } catch (_: Exception) { null }
 
         val spread = try {
-            val limitsJson = getJson("https://cdn.tsetmc.com/api/BestLimits/$insCode")
-            // TSETMC BestLimits commonly exposes pMeDem/pMeOf; pd/po are compatibility aliases.
-            val limits = findArrayWithFields(
-                limitsJson,
-                setOf("pMeDem", "pMeOf", "pd", "po", "bestBuyPrice", "bestSellPrice")
-            ) ?: JSONArray()
-            var bid = 0.0
-            var ask = 0.0
-            for (i in 0 until limits.length()) {
-                val level = limits.optJSONObject(i) ?: continue
-                val demand = firstNumberIgnoreCase(level, "pMeDem", "pd", "bestBuyPrice") ?: 0.0
-                val offer = firstNumberIgnoreCase(level, "pMeOf", "po", "bestSellPrice") ?: 0.0
-                if (demand > 0.0 && (bid == 0.0 || demand > bid)) bid = demand
-                if (offer > 0.0 && (ask == 0.0 || offer < ask)) ask = offer
+            fun calculateSpread(levels: JSONArray, latestSnapshotOnly: Boolean): Double? {
+                if (levels.length() == 0) return null
+                val rows = (0 until levels.length()).mapNotNull { levels.optJSONObject(it) }
+                val selected = if (latestSnapshotOnly) {
+                    val latestTime = rows.mapNotNull { firstNumberIgnoreCase(it, "hEven") }.maxOrNull()
+                    if (latestTime == null) rows else rows.filter {
+                        firstNumberIgnoreCase(it, "hEven") == latestTime
+                    }
+                } else rows
+                var bid = 0.0
+                var ask = 0.0
+                selected.forEach { level ->
+                    val demand = firstNumberIgnoreCase(level, "pMeDem", "pd", "bestBuyPrice") ?: 0.0
+                    val offer = firstNumberIgnoreCase(level, "pMeOf", "po", "bestSellPrice") ?: 0.0
+                    if (demand > 0.0 && (bid == 0.0 || demand > bid)) bid = demand
+                    if (offer > 0.0 && (ask == 0.0 || offer < ask)) ask = offer
+                }
+                return if (bid > 0.0 && ask > 0.0 && ask >= bid) {
+                    ((ask - bid) / ((ask + bid) / 2.0)) * 100.0
+                } else null
             }
-            if (bid > 0.0 && ask > 0.0 && ask >= bid) {
-                ((ask - bid) / ((ask + bid) / 2.0)) * 100.0
-            } else null
+
+            val liveRoot = getJson("https://cdn.tsetmc.com/api/BestLimits/$insCode")
+            val liveRows = findArray(liveRoot, setOf("bestLimits"))
+            val liveSpread = calculateSpread(liveRows, false)
+            if (liveSpread != null) liveSpread else {
+                // Outside market hours BestLimits is often empty. Use the last
+                // available trading day's final historical order-book snapshot.
+                val lastTradeDate = firstNumber(priceObject, "dEven")?.toLong()
+                if (lastTradeDate == null) null else {
+                    val historyRoot = getJson(
+                        "https://cdn.tsetmc.com/api/BestLimits/$insCode/$lastTradeDate"
+                    )
+                    val historyRows = findArray(historyRoot, setOf("bestLimitsHistory"))
+                    calculateSpread(historyRows, true)
+                }
+            }
         } catch (_: Exception) {
             null
         }
