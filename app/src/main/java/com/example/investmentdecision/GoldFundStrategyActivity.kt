@@ -727,9 +727,19 @@ class GoldFundStrategyActivity : Activity() {
                     GoldFundHistoryStore(this).latestClosingPrices(code, 60)
                 )
             }
-            val levelsText = technicalLevels?.let { levels ->
-                "سطوح محاسباتی بر پایه ۲۰ روز حمایت/مقاومت و میانگین نوسان روزانه: ورود اول ${fmt(levels.entry1)}، ورود دوم ${fmt(levels.entry2)}، حد ضرر ${fmt(levels.stopLoss)}، هدف اول ${fmt(levels.target1)}، هدف دوم ${fmt(levels.target2)} تومان. این سطوح تخمینی‌اند و هنوز بک‌تست نشده‌اند."
-            } ?: "سطوح تکنیکال صادر نشد: حداقل ۲۰ قیمت پایانی جفت‌شده معتبر یا نوسان کافی در تاریخچه موجود نیست."
+            val buyLevelsText = technicalLevels?.let { levels ->
+                "سطوح مخصوص سناریوی خرید: ورود اول ${fmt(levels.entry1)}، ورود دوم ${fmt(levels.entry2)}، حد ضرر ${fmt(levels.stopLoss)}، هدف اول ${fmt(levels.target1)} و هدف دوم ${fmt(levels.target2)} تومان. این سطوح تخمینی‌اند و هنوز بک‌تست نشده‌اند."
+            } ?: "سطوح ورود صادر نشد: حداقل ۲۰ قیمت پایانی معتبر یا نوسان کافی در تاریخچه موجود نیست."
+            // For an exit signal, never expose buy-entry levels. Offer an immediate
+            // first-stage exit at the current quote and a second stage only if the
+            // 20-session resistance is above the current price.
+            val exitLevelsText = technicalLevels?.let { levels ->
+                if (levels.resistance20 > f.price) {
+                    "نقطه خروج اول: قیمت فعلی ${fmt(f.price)} تومان؛ نقطه خروج دوم: مقاومت ۲۰روزه ${fmt(levels.resistance20)} تومان. این‌ها سطوح پیشنهادی خروج پله‌ای‌اند، نه تضمین اجرای سفارش."
+                } else {
+                    "نقطه خروج: قیمت فعلی ${fmt(f.price)} تومان. مقاومت ۲۰روزه بالاتر از قیمت فعلی نیست؛ بنابراین هدف خروج دومِ بالاتر صادر نشد."
+                }
+            } ?: "نقطه خروج عددی صادر نشد؛ تاریخچه معتبر کافی برای محاسبه مقاومت وجود ندارد. وضعیت خروج را با قیمت روز بررسی کن."
             val instruction = when (item.action) {
                 "نامزد بررسی خرید" -> {
                     val maxEntry = f.nav
@@ -747,7 +757,7 @@ class GoldFundStrategyActivity : Activity() {
                         "دستورالعمل شما: فعلاً خرید نکنید. قیمت بازار ${fmt(f.price)} تومان و بالاتر از NAV ${fmt(f.nav)} تومان است. این صندوق فقط نامزد است؛ تا زمانی که قیمت به NAV یا پایین‌تر نرسیده و سیگنال با داده تازه برقرار نمانده، سفارش خرید نگذارید."
                     }
                 }
-                "نامزد بررسی فروش/خروج" -> "دستورالعمل شما: خرید جدید را متوقف کنید و وضعیت خروج را بررسی کنید. $levelsText اهداف قیمتی صرفاً سناریوی مدیریت معامله‌اند، نه دستور فروش قطعی؛ تعداد واحد و قیمت تمام‌شده شما در برنامه ثبت نشده است."
+                "نامزد بررسی فروش/خروج" -> "دستورالعمل شما: خرید جدید را متوقف کنید. $exitLevelsText تعداد واحد و قیمت تمام‌شده دارایی شما در برنامه ثبت نشده؛ بنابراین این نقاط، خروج پله‌ای پیشنهادی‌اند و دستور فروش قطعی شخصی‌سازی‌شده نیستند."
                 else -> "دستورالعمل شما: فعلاً معامله جدید انجام ندهید. منتظر دریافت داده تازه و تغییر وضعیت سیگنال بمانید."
             }
             c.addView(label(instruction, 13, true).apply {
@@ -755,10 +765,14 @@ class GoldFundStrategyActivity : Activity() {
                     else if (item.action.contains("فروش")) red else ink)
                 setPadding(0, dp(7), 0, dp(3))
             })
-            if (technicalLevels != null) {
-                c.addView(label(levelsText, 12, true).apply { setPadding(0, dp(5), 0, dp(3)) })
-            } else {
-                c.addView(label(levelsText, 12, false).apply { setPadding(0, dp(5), 0, dp(3)) })
+            when (item.action) {
+                "نامزد بررسی خرید" -> c.addView(label(buyLevelsText, 12, technicalLevels != null).apply {
+                    setPadding(0, dp(5), 0, dp(3))
+                })
+                "نامزد بررسی فروش/خروج" -> c.addView(label(exitLevelsText, 12, technicalLevels != null).apply {
+                    setPadding(0, dp(5), 0, dp(3))
+                })
+                // Watch / no-trade cards intentionally show no entry or exit prices.
             }
             resultArea.addView(c, matchWrap())
         }
