@@ -702,7 +702,7 @@ class GoldFundStrategyActivity : Activity() {
                 12, false
             ))
             c.addView(label(
-                "خالص خرید حقیقی معاملات ثانویه: ${f.netRealFlowToman?.let { fmt(it) + \" تومان\" } ?: \"داده پیدا نشد\"} | در امتیاز لحاظ نشده",
+                "خالص خرید حقیقی معاملات ثانویه: ${f.netRealFlowToman?.let { fmt(it) + " تومان" } ?: "داده پیدا نشد"} | در امتیاز لحاظ نشده",
                 12, false
             ))
             c.addView(label(item.action, 14, true).apply {
