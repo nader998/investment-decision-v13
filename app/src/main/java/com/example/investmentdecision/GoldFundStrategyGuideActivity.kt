@@ -117,7 +117,7 @@ class GoldFundStrategyGuideActivity : Activity() {
             text = value
             textSize = size.toFloat()
             setTextColor(color)
-            gravity = gravity
+            setGravity(gravity)
             textDirection = View.TEXT_DIRECTION_RTL
             if (bold) setTypeface(typeface, android.graphics.Typeface.BOLD)
             setPadding(0, dp(4), 0, dp(5))
