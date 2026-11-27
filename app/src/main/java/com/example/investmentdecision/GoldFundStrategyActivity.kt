@@ -100,6 +100,17 @@ class GoldFundStrategyActivity : Activity() {
             addView(page)
         }
 
+        page.addView(Button(this).apply {
+            text = "راهنمای نوسان‌گیری و شرایط سیگنال‌ها"
+            isAllCaps = false
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            setBackgroundColor(blue)
+            setOnClickListener {
+                startActivity(Intent(this@GoldFundStrategyActivity, GoldFundStrategyGuideActivity::class.java))
+            }
+        }, matchWrap())
+
         page.addView(label("نوسان‌گیری صندوق‌های طلا", 23, true, Gravity.CENTER))
         page.addView(label(
             "تحلیل نسبی صندوق‌ها بر اساس حباب، بازدهی، مومنتوم، نقدشوندگی و جریان پول",
