@@ -15,6 +15,10 @@
             android:exported="false" />
 
         <activity
+            android:name=".GoldFundStrategyGuideActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".GoldFundStrategyActivity"
             android:exported="false" />
 
