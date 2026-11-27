@@ -6,8 +6,10 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 
 /**
- * Local store for paired daily closing-price and redemption-NAV observations.
- * A row is eligible for premium statistics only when both values are valid.
+ * Local store for paired daily closing-price and NAV observations.
+ * A row is eligible for premium statistics and trading-day returns only
+ * when both values are valid. NAV-only dates are retained for reference
+ * but are not counted as exchange trading days.
  */
 class GoldFundHistoryStore(context: Context) :
     SQLiteOpenHelper(context, "gold_fund_history.db", null, 1) {
@@ -101,13 +103,15 @@ class GoldFundHistoryStore(context: Context) :
         readableDatabase.rawQuery(
             """
             SELECT nav_toman FROM daily_history
-            WHERE ins_code = ? AND nav_toman > 0
+            WHERE ins_code = ? AND close_toman > 0 AND nav_toman > 0
             ORDER BY trade_date DESC LIMIT ?
             """.trimIndent(),
             arrayOf(insCode, (tradingDays + 1).toString())
         ).use { cursor ->
             while (cursor.moveToNext()) values.add(cursor.getDouble(0))
         }
+        // Count only exchange trading dates. NAV reports without a closing
+        // market price remain stored, but do not shorten the return period.
         if (values.size <= tradingDays) return null
         val latest = values.first()
         val prior = values[tradingDays]
