@@ -276,26 +276,33 @@ class GoldFundAutoDataActivity : Activity() {
 
         val netRealFlow = try {
             val flowRoot = getJson("https://cdn.tsetmc.com/api/ClientType/GetClientTypeHistory/$insCode")
-            val flowRows = findArray(flowRoot, setOf("clientType"))
+            val flowRows = findArrayWithFields(
+                flowRoot,
+                setOf("buy_I_Value", "buyIValue", "buy_i_value", "sell_I_Value", "sellIValue", "sell_i_value")
+            ) ?: JSONArray()
             val latestFlow = (0 until flowRows.length())
                 .mapNotNull { flowRows.optJSONObject(it) }
-                .maxByOrNull { firstNumber(it, "recDate") ?: 0.0 }
+                .maxByOrNull { firstNumberIgnoreCase(it, "recDate", "dEven", "date") ?: 0.0 }
             if (latestFlow == null) null else {
-                val buy = firstNumber(latestFlow, "buy_I_Value")
-                val sell = firstNumber(latestFlow, "sell_I_Value")
+                val buy = firstNumberIgnoreCase(latestFlow, "buy_I_Value", "buyIValue", "buy_i_value")
+                val sell = firstNumberIgnoreCase(latestFlow, "sell_I_Value", "sellIValue", "sell_i_value")
                 if (buy != null && sell != null) (buy - sell) / 10.0 else null
             }
         } catch (_: Exception) { null }
 
         val spread = try {
             val limitsJson = getJson("https://cdn.tsetmc.com/api/BestLimits/$insCode")
-            val limits = findArray(limitsJson, setOf("bestLimits"))
+            // TSETMC BestLimits commonly exposes pMeDem/pMeOf; pd/po are compatibility aliases.
+            val limits = findArrayWithFields(
+                limitsJson,
+                setOf("pMeDem", "pMeOf", "pd", "po", "bestBuyPrice", "bestSellPrice")
+            ) ?: JSONArray()
             var bid = 0.0
             var ask = 0.0
             for (i in 0 until limits.length()) {
                 val level = limits.optJSONObject(i) ?: continue
-                val demand = firstNumber(level, "pd") ?: 0.0
-                val offer = firstNumber(level, "po") ?: 0.0
+                val demand = firstNumberIgnoreCase(level, "pMeDem", "pd", "bestBuyPrice") ?: 0.0
+                val offer = firstNumberIgnoreCase(level, "pMeOf", "po", "bestSellPrice") ?: 0.0
                 if (demand > 0.0 && (bid == 0.0 || demand > bid)) bid = demand
                 if (offer > 0.0 && (ask == 0.0 || offer < ask)) ask = offer
             }
@@ -403,8 +410,15 @@ class GoldFundAutoDataActivity : Activity() {
         val r15 = historyStore.navReturnPercent(insCode, 15)
         val r30 = historyStore.navReturnPercent(insCode, 30)
         val percentile = historyStore.percentile60(insCode)
+        val missingReturns = listOfNotNull(
+            if (r5 == null) "بازده ۵روزه" else null,
+            if (r15 == null) "بازده ۱۵روزه" else null,
+            if (r30 == null) "بازده ۳۰روزه" else null,
+            if (percentile == null) "درصدک ۶۰روزه" else null
+        )
         val status = when {
-            paired >= 60 -> "تاریخچه قیمت و NAV کامل است"
+            paired >= 60 && missingReturns.isEmpty() -> "تاریخچه قیمت و NAV کامل است"
+            paired >= 60 -> "۶۰ روز تاریخچه جفت‌شده موجود است، اما ${missingReturns.joinToString("، ")} قابل محاسبه نیست"
             registrationNumber == null -> "کد ثبت صندوق در فهرست TSETMC پیدا نشد؛ نام/نماد تطبیق داده نشد"
             navByDate.isEmpty() -> "NAV تاریخی از پاسخ صندوق استخراج نشد"
             bourseeyeSaved > 0 -> "تاریخچه از Bourseeye به‌روزرسانی شد؛ $paired روز جفت‌شده"
@@ -631,6 +645,50 @@ class GoldFundAutoDataActivity : Activity() {
                     }
                 }
             }
+        }
+        return null
+    }
+
+    private fun findArrayWithFields(root: JSONObject, fieldNames: Set<String>): JSONArray? {
+        val normalized = fieldNames.map { it.lowercase(Locale.ROOT) }.toSet()
+        val keys = root.keys()
+        while (keys.hasNext()) {
+            val value = root.opt(keys.next())
+            when (value) {
+                is JSONArray -> {
+                    val hasMatchingRow = (0 until value.length()).any { index ->
+                        val row = value.optJSONObject(index) ?: return@any false
+                        val rowKeys = row.keys()
+                        while (rowKeys.hasNext()) {
+                            if (rowKeys.next().lowercase(Locale.ROOT) in normalized) return@any true
+                        }
+                        false
+                    }
+                    if (hasMatchingRow) return value
+                    for (index in 0 until value.length()) {
+                        val child = value.optJSONObject(index) ?: continue
+                        findArrayWithFields(child, fieldNames)?.let { return it }
+                    }
+                }
+                is JSONObject -> findArrayWithFields(value, fieldNames)?.let { return it }
+            }
+        }
+        return null
+    }
+
+    private fun firstNumberIgnoreCase(obj: JSONObject, vararg keys: String): Double? {
+        val wanted = keys.map { it.lowercase(Locale.ROOT) }.toSet()
+        val iterator = obj.keys()
+        while (iterator.hasNext()) {
+            val key = iterator.next()
+            if (key.lowercase(Locale.ROOT) !in wanted) continue
+            val value = obj.opt(key)
+            val number = when (value) {
+                is Number -> value.toDouble()
+                is String -> value.toDoubleOrNull()
+                else -> null
+            }
+            if (number != null && number.isFinite()) return number
         }
         return null
     }
