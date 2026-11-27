@@ -541,8 +541,10 @@ class GoldFundAutoDataActivity : Activity() {
                 if (cells.size <= maxOf(dateIndex, navIndex, closeIndex)) return@forEach
                 val dateKey = parseBourseeyeJalaliDate(cells[dateIndex]) ?: return@forEach
                 val nav = parsePersianToman(cells[navIndex]) ?: return@forEach
-                val close = parsePersianToman(cells[closeIndex]) ?: return@forEach
-                if (nav > 0.0 && close > 0.0) {
+                // NAV can be published on a day without exchange trading; keep it
+                // for NAV returns even when that day's closing price is unavailable.
+                val close = parsePersianToman(cells[closeIndex])
+                if (nav > 0.0) {
                     store.upsert(insCode, dateKey, close, nav)
                     saved++
                 }
@@ -572,17 +574,20 @@ class GoldFundAutoDataActivity : Activity() {
     }
 
     private fun parsePersianToman(raw: String): Double? {
-        val ascii = raw.map { ch ->
+        val ascii = raw.mapNotNull { ch ->
             when (ch) {
                 in '۰'..'۹' -> ('0'.code + ch.code - '۰'.code).toChar()
                 in '٠'..'٩' -> ('0'.code + ch.code - '٠'.code).toChar()
                 '٫' -> '.'
+                // Persian/Arabic and Latin thousands separators must not split
+                // a value such as ۴٬۱۳۰ into the incorrect number 4.
+                '٬', ',' -> null
                 '−', '－' -> '-'
                 else -> ch
             }
         }.joinToString("")
-        val number = Regex("-?[0-9][0-9,]*(?:\\.[0-9]+)?").find(ascii)?.value
-            ?.replace(",", "")?.toDoubleOrNull()
+            .replace(Regex("(?<=\\d)[\\s\\u00A0\\u202F](?=\\d)"), "")
+        val number = Regex("-?[0-9]+(?:\\.[0-9]+)?").find(ascii)?.value?.toDoubleOrNull()
         return number?.takeIf { it.isFinite() && it > 0.0 }
     }
 
