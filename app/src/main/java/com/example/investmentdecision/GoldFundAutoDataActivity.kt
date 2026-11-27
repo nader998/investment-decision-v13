@@ -531,7 +531,7 @@ class GoldFundAutoDataActivity : Activity() {
                     label == wanted -> 100
                     label.length >= 5 && wanted.length >= 5 &&
                         (label.contains(wanted) || wanted.contains(label)) -> 88
-                    else {
+                    else -> {
                         // Tokenize original text: normalization removes separators.
                         val tokens = raw.split(Regex("[^\\p{L}\\p{N}]+"))
                             .map { normalizeFundName(it) }.filter { it.length >= 3 }.toSet()
