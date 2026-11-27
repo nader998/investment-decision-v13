@@ -103,16 +103,16 @@ class GoldFundHistoryStore(context: Context) :
         readableDatabase.rawQuery(
             """
             SELECT nav_toman FROM daily_history
-            WHERE ins_code = ? AND nav_toman > 0
+            WHERE ins_code = ? AND close_toman > 0 AND nav_toman > 0
             ORDER BY trade_date DESC LIMIT ?
             """.trimIndent(),
             arrayOf(insCode, (tradingDays + 1).toString())
         ).use { cursor ->
             while (cursor.moveToNext()) values.add(cursor.getDouble(0))
         }
-        // NAV performance is calculated from NAV observations only. Requiring
-        // a same-day closing price incorrectly made valid NAV-only dates vanish
-        // and returned null/incorrect 5, 15 and 30 trading-day performance.
+        // These are explicitly trading-day returns: count only dates with a
+        // valid exchange closing price AND a valid NAV. NAV-only publication
+        // dates are retained in storage but must not shorten the trading window.
         if (values.size <= tradingDays) return null
         val latest = values.first()
         val prior = values[tradingDays]
