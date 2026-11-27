@@ -36,7 +36,8 @@ class GoldFundStrategyActivity : Activity() {
         val flowPct: Double,
         val dataComplete: Boolean,
         // TSETMC net individual-investor trading flow; not fund issuance/redemption cash flow.
-        val netRealFlowToman: Double? = null
+        val netRealFlowToman: Double? = null,
+        val insCode: String? = null
     ) {
         val premium: Double get() = (price / nav - 1.0) * 100.0
         val mediumReturn: Double get() = (r15 + r30) / 2.0
@@ -375,7 +376,8 @@ class GoldFundStrategyActivity : Activity() {
                     // subscription/redemption cash flow and is not scored.
                     flowPct = 0.0,
                     dataComplete = true,
-                    netRealFlowToman = value("netRealFlowToman")
+                    netRealFlowToman = value("netRealFlowToman"),
+                    insCode = item.optString("insCode").takeIf { it.isNotBlank() }
                 ))
             }
         } catch (_: Exception) {
@@ -719,6 +721,15 @@ class GoldFundStrategyActivity : Activity() {
                 )
                 setPadding(0, dp(5), 0, 0)
             })
+            val technicalLevels = f.insCode?.let { code ->
+                GoldFundTradeLevels.calculate(
+                    f.price,
+                    GoldFundHistoryStore(this).latestClosingPrices(code, 60)
+                )
+            }
+            val levelsText = technicalLevels?.let { levels ->
+                "سطوح محاسباتی بر پایه ۲۰ روز حمایت/مقاومت و میانگین نوسان روزانه: ورود اول ${fmt(levels.entry1)}، ورود دوم ${fmt(levels.entry2)}، حد ضرر ${fmt(levels.stopLoss)}، هدف اول ${fmt(levels.target1)}، هدف دوم ${fmt(levels.target2)} تومان. این سطوح تخمینی‌اند و هنوز بک‌تست نشده‌اند."
+            } ?: "سطوح تکنیکال صادر نشد: حداقل ۲۰ قیمت پایانی جفت‌شده معتبر یا نوسان کافی در تاریخچه موجود نیست."
             val instruction = when (item.action) {
                 "نامزد بررسی خرید" -> {
                     val maxEntry = f.nav
@@ -731,12 +742,12 @@ class GoldFundStrategyActivity : Activity() {
                     if (assignedBudget <= 0.0) {
                         "دستورالعمل شما: این صندوق نامزد خرید است، اما در بودجه فعلی جایگاه اول یا دوم را ندارد؛ فعلاً برای آن خرید نکنید."
                     } else if (f.price <= maxEntry) {
-                        "دستورالعمل شما: جایگاه ${if (f.name == firstBuyName) "اول" else "دوم"} خرید. سقف بودجه این موقعیت ${fmt(assignedBudget)} تومان، حدود ${NumberFormat.getNumberInstance(Locale("fa", "IR")).format(units)} واحد. فقط سفارش محدود با قیمت حداکثر NAV یعنی ${fmt(maxEntry)} تومان بگذارید. این سقف یک قاعده محافظه‌کارانه بر مبنای NAV است، نه پیش‌بینی تضمینی کف قیمت. مرحله دوم فقط پس از دریافت داده تازه و باقی‌ماندن سیگنال خرید انجام شود؛ اگر قیمت از NAV بالاتر رفت یا داده ناقص/قدیمی شد، خرید نکنید."
+                        "دستورالعمل شما: جایگاه ${if (f.name == firstBuyName) "اول" else "دوم"} خرید؛ سقف بودجه ${fmt(assignedBudget)} تومان، حدود ${NumberFormat.getNumberInstance(Locale("fa", "IR")).format(units)} واحد با قیمت فعلی. فقط سفارش محدود و حداکثر تا NAV یعنی ${fmt(maxEntry)} تومان. $levelsText تا وقتی قیمت به محدوده ورود اول/دوم نرسیده خرید تعقیبی نکنید؛ پس از ورود، حد ضرر و اهداف را با داده تازه کنترل کنید. این سطوح هنوز آزمون تاریخی نشده‌اند."
                     } else {
                         "دستورالعمل شما: فعلاً خرید نکنید. قیمت بازار ${fmt(f.price)} تومان و بالاتر از NAV ${fmt(f.nav)} تومان است. این صندوق فقط نامزد است؛ تا زمانی که قیمت به NAV یا پایین‌تر نرسیده و سیگنال با داده تازه برقرار نمانده، سفارش خرید نگذارید."
                     }
                 }
-                "نامزد بررسی فروش/خروج" -> "دستورالعمل شما: اگر این صندوق را دارید، فعلاً خرید جدید را متوقف کنید. این وضعیت فقط نامزد بررسی خروج است و فروش قطعی نیست؛ برنامه موجودی و قیمت تمام‌شده شما را ندارد، بنابراین درصد یا تعداد فروش و حد قیمت شخصی تعیین نمی‌کند. تا ثبت موجودی و تأیید سیگنال فروش، دستور فروش عددی صادر نمی‌شود. اگر این صندوق را ندارید، خرید نکنید."
+                "نامزد بررسی فروش/خروج" -> "دستورالعمل شما: خرید جدید را متوقف کنید و وضعیت خروج را بررسی کنید. $levelsText اهداف قیمتی صرفاً سناریوی مدیریت معامله‌اند، نه دستور فروش قطعی؛ تعداد واحد و قیمت تمام‌شده شما در برنامه ثبت نشده است."
                 else -> "دستورالعمل شما: فعلاً معامله جدید انجام ندهید. منتظر دریافت داده تازه و تغییر وضعیت سیگنال بمانید."
             }
             c.addView(label(instruction, 13, true).apply {
@@ -744,6 +755,11 @@ class GoldFundStrategyActivity : Activity() {
                     else if (item.action.contains("فروش")) red else ink)
                 setPadding(0, dp(7), 0, dp(3))
             })
+            if (technicalLevels != null) {
+                c.addView(label(levelsText, 12, true).apply { setPadding(0, dp(5), 0, dp(3)) })
+            } else {
+                c.addView(label(levelsText, 12, false).apply { setPadding(0, dp(5), 0, dp(3)) })
+            }
             resultArea.addView(c, matchWrap())
         }
 
@@ -844,6 +860,7 @@ class GoldFundStrategyActivity : Activity() {
                 put("flowPct", f.flowPct)
                 if (f.netRealFlowToman != null) put("netRealFlowToman", f.netRealFlowToman) else put("netRealFlowToman", JSONObject.NULL)
                 put("dataComplete", f.dataComplete)
+                put("insCode", f.insCode ?: "")
             })
         }
         prefs.edit().putString("funds", array.toString()).apply()
@@ -871,7 +888,8 @@ class GoldFundStrategyActivity : Activity() {
                     // Saved snapshots must be refreshed and re-imported
                     // after app restart before they can produce a signal.
                     false,
-                    if (o.isNull("netRealFlowToman")) null else o.optDouble("netRealFlowToman").takeIf { it.isFinite() }
+                    if (o.isNull("netRealFlowToman")) null else o.optDouble("netRealFlowToman").takeIf { it.isFinite() },
+                    o.optString("insCode").takeIf { it.isNotBlank() }
                 ))
             }
         } catch (_: Exception) {
