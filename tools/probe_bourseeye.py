@@ -159,6 +159,11 @@ def main():
                 break
             page_data[fid] = result
             print(f"HISTORY fid={fid}; label={item['label']}; HTTP={result['http']}; ROWS={result['rows']}; VALID_PRICE_NAV_PAIRS={result['valid_pairs']}; UNIQUE_PAIRS={result.get('unique_pairs',0)}; NAV_OBSERVATIONS={result.get('nav_observations',0)}; NAV_RETURN_5_15_30={result.get('return5')}/{result.get('return15')}/{result.get('return30')}; HEADERS={result['headers']}")
+            if not result["headers"]:
+                title = page.title.get_text(" ", strip=True) if page.title else ""
+                text_sample = page.get_text(" ", strip=True)[:900]
+                script_sample = " ".join(x.get_text(" ", strip=True) for x in page.select("script") if any(k in x.get_text() for k in ("history","nav","fund","chart","__NEXT_DATA__")))[:1800]
+                print(f"HTML_DIAG fid={fid}; URL={r.url}; BYTES={len(r.content)}; TITLE={title}; TABLES={len(page.select('table'))}; BODY={text_sample}; SCRIPTS={script_sample}")
         except Exception as exc:
             page_data[fid] = {"http":"ERROR","rows":0,"valid_pairs":0,"headers":[],"url":url}
             print(f"HISTORY fid={fid}; label={item['label']}; ERROR={type(exc).__name__}:{exc}")
