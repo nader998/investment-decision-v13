@@ -88,6 +88,22 @@ class GoldFundHistoryStore(context: Context) :
         return result
     }
 
+    /** Latest paired daily closes, newest first; used only for technical price levels. */
+    fun latestClosingPrices(insCode: String, limit: Int = 60): List<Double> {
+        val result = mutableListOf<Double>()
+        readableDatabase.rawQuery(
+            """
+            SELECT close_toman FROM daily_history
+            WHERE ins_code = ? AND close_toman > 0 AND nav_toman > 0
+            ORDER BY trade_date DESC LIMIT ?
+            """.trimIndent(),
+            arrayOf(insCode, limit.coerceIn(1, 120).toString())
+        ).use { cursor ->
+            while (cursor.moveToNext()) result.add(cursor.getDouble(0))
+        }
+        return result
+    }
+
     fun pairedObservationCount(insCode: String): Int {
         readableDatabase.rawQuery(
             "SELECT COUNT(*) FROM daily_history WHERE ins_code = ? AND close_toman > 0 AND nav_toman > 0",
