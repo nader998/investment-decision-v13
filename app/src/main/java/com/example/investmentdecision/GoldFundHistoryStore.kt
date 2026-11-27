@@ -34,16 +34,30 @@ class GoldFundHistoryStore(context: Context) :
 
     fun upsert(insCode: String, date: String, closeToman: Double?, navToman: Double?) {
         if (insCode.isBlank() || !date.matches(Regex("\\d{8}"))) return
+        val db = writableDatabase
+        var existingClose: Double? = null
+        var existingNav: Double? = null
+        db.rawQuery(
+            "SELECT close_toman, nav_toman FROM daily_history WHERE ins_code = ? AND trade_date = ?",
+            arrayOf(insCode, date)
+        ).use { cursor ->
+            if (cursor.moveToFirst()) {
+                if (!cursor.isNull(0)) existingClose = cursor.getDouble(0)
+                if (!cursor.isNull(1)) existingNav = cursor.getDouble(1)
+            }
+        }
+        // A missing value from one source must never erase a valid value already
+        // collected from another source for the same fund/date.
+        val finalClose = closeToman?.takeIf { it.isFinite() && it > 0.0 } ?: existingClose
+        val finalNav = navToman?.takeIf { it.isFinite() && it > 0.0 } ?: existingNav
         val values = ContentValues().apply {
             put("ins_code", insCode)
             put("trade_date", date)
-            if (closeToman != null && closeToman > 0.0) put("close_toman", closeToman)
-            else putNull("close_toman")
-            if (navToman != null && navToman > 0.0) put("nav_toman", navToman)
-            else putNull("nav_toman")
+            if (finalClose != null) put("close_toman", finalClose) else putNull("close_toman")
+            if (finalNav != null) put("nav_toman", finalNav) else putNull("nav_toman")
             put("fetched_at", System.currentTimeMillis())
         }
-        writableDatabase.insertWithOnConflict(
+        db.insertWithOnConflict(
             "daily_history", null, values, SQLiteDatabase.CONFLICT_REPLACE
         )
     }
