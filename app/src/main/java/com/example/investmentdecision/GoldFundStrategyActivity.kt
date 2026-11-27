@@ -153,6 +153,15 @@ class GoldFundStrategyActivity : Activity() {
         importCard.addView(autoImportArea)
         page.addView(importCard, matchWrap())
 
+        page.addView(Button(this).apply {
+            text = "تحلیل خودکار صندوق‌های دارای داده کامل"
+            isAllCaps = false
+            textSize = 15f
+            setTextColor(Color.WHITE)
+            setBackgroundColor(green)
+            setOnClickListener { importCompleteAutoQuotes() }
+        }, matchWrap())
+
         val form = card()
         form.addView(label("ثبت یا به‌روزرسانی اطلاعات صندوق", 18, true))
         nameInput = addInput(form, "نام صندوق", "مثلاً نام دقیق نماد/صندوق", false)
@@ -290,6 +299,96 @@ class GoldFundStrategyActivity : Activity() {
                 12, false
             ))
         }
+    }
+
+    /**
+     * Imports only real, non-null automatic quote fields. Older/manual records
+     * are marked ineligible for this automatic run so stale values cannot create
+     * a buy/sell candidate alongside the newly fetched market snapshot.
+     */
+    private fun importCompleteAutoQuotes() {
+        val raw = getSharedPreferences("tsetmc_fund_cache", MODE_PRIVATE)
+            .getString("last_quotes", null)
+        if (raw.isNullOrBlank()) {
+            Toast.makeText(this, "ابتدا اطلاعات خودکار صندوق‌ها را دریافت کن.", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        val imported = mutableListOf<Fund>()
+        var incomplete = 0
+        try {
+            val quotes = JSONArray(raw)
+            for (i in 0 until quotes.length()) {
+                val item = quotes.optJSONObject(i) ?: continue
+                fun value(key: String): Double? =
+                    if (item.isNull(key)) null
+                    else item.optDouble(key, Double.NaN).takeIf { it.isFinite() }
+
+                val name = item.optString("name").ifBlank { item.optString("symbol") }
+                val asOf = item.optString("date")
+                val price = value("marketPriceToman")
+                val nav = value("navToman")
+                val r5 = value("return5")
+                val r15 = value("return15")
+                val r30 = value("return30")
+                val percentile = value("premiumPercentile60")
+                val volume = value("tradeValueToman")
+                val spread = value("spreadPercent")
+                val paired = item.optInt("pairedHistoryCount", 0)
+
+                val complete = name.isNotBlank() && asOf.isNotBlank() &&
+                    price != null && price > 0.0 &&
+                    nav != null && nav > 0.0 &&
+                    r5 != null && r15 != null && r30 != null &&
+                    percentile != null && percentile in 0.0..100.0 &&
+                    volume != null && volume >= 0.0 &&
+                    spread != null && spread >= 0.0 &&
+                    paired >= 60
+                if (!complete) {
+                    incomplete++
+                    continue
+                }
+
+                imported.add(Fund(
+                    name = item.optString("symbol").ifBlank { name },
+                    asOf = asOf,
+                    price = price!!,
+                    nav = nav!!,
+                    r5 = r5!!,
+                    r15 = r15!!,
+                    r30 = r30!!,
+                    premiumPercentile = percentile!!,
+                    volume = volume!!,
+                    spread = spread!!,
+                    // TSETMC individual investor trading flow is not fund
+                    // subscription/redemption cash flow and is not scored.
+                    flowPct = 0.0,
+                    dataComplete = true
+                ))
+            }
+        } catch (_: Exception) {
+            Toast.makeText(this, "خواندن داده‌های خودکار ممکن نشد؛ دوباره دریافت کن.", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        // Disable older records for this run; only the fresh, complete auto
+        // snapshot can participate in the ranking and candidate signals.
+        for (i in funds.indices) funds[i] = funds[i].copy(dataComplete = false)
+        imported.forEach { fresh ->
+            val existing = funds.indexOfFirst {
+                it.name.equals(fresh.name, ignoreCase = true)
+            }
+            if (existing >= 0) funds[existing] = fresh else funds.add(fresh)
+        }
+
+        saveFunds()
+        renderFunds()
+        analyze()
+        Toast.makeText(
+            this,
+            "صندوق کامل واردشده: ${imported.size} | داده ناکامل/فاقد تاریخچه ۶۰روزه: $incomplete",
+            Toast.LENGTH_LONG
+        ).show()
     }
 
     private fun addInput(
