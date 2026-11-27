@@ -516,7 +516,7 @@ class GoldFundAutoDataActivity : Activity() {
             val score = wanted.maxOfOrNull { w ->
                 when {
                     label == w -> 100
-                    label.contains(w) || w.contains(label) && label.length >= 5 -> 80
+                    label.length >= 5 && w.length >= 5 && (label.contains(w) || w.contains(label)) -> 80
                     else -> {
                         val tokens = w.split(Regex("[^\\p{L}\\p{N}]+")).filter { it.length >= 3 }.toSet()
                         val other = label.split(Regex("[^\\p{L}\\p{N}]+")).filter { it.length >= 3 }.toSet()
@@ -533,8 +533,11 @@ class GoldFundAutoDataActivity : Activity() {
             .filter { it.third >= 65 }
             .distinctBy { it.first }
             .sortedByDescending { it.third }
-            .take(6)
-        for (candidate in orderedCandidates) {
+        // Reject ambiguous top matches. A wrong history page is worse than
+        // showing "data not found", because it silently corrupts fund returns.
+        val bestScore = orderedCandidates.firstOrNull()?.third ?: return 0
+        if (orderedCandidates.count { it.third == bestScore } != 1) return 0
+        for (candidate in orderedCandidates.take(6)) {
             val historyUrl = candidate.first.trimEnd('/') + "/history"
             val html = try { downloadHtml(historyUrl) } catch (_: Exception) { continue }
             val doc = Jsoup.parse(html, historyUrl)
