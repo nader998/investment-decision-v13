@@ -152,9 +152,10 @@ def main():
                 unique_nav = {row[0]: row for row in nav_rows}
                 ordered_nav = sorted(unique_nav.values(), key=lambda x:x[0], reverse=True)
                 def nav_return(days):
-                    if len(ordered_nav) <= days or ordered_nav[days][1] <= 0:
+                    # Match Android: use actual trading dates with both close and NAV.
+                    if len(ordered) <= days or ordered[days][1] <= 0:
                         return None
-                    return round((ordered_nav[0][1]/ordered_nav[days][1]-1)*100, 4)
+                    return round((ordered[0][1]/ordered[days][1]-1)*100, 4)
                 result.update(rows=data_count, valid_pairs=valid, unique_pairs=len(unique), nav_observations=len(unique_nav), return5=nav_return(5), return15=nav_return(15), return30=nav_return(30), headers=headers)
                 break
             page_data[fid] = result
