@@ -483,11 +483,11 @@ class GoldFundAutoDataActivity : Activity() {
         }
 
         // Never replace a previously stored NAV with null when a source date is absent.
+        // Preserve every valid closing price even when NAV is unavailable for
+        // that date. Technical entry/stop/target levels need price history only;
+        // premium percentile and paired-history metrics still require both values.
         prices.forEach { (day, close) ->
-            val historicalNav = navByDate[day]
-            if (historicalNav != null) {
-                historyStore.upsert(insCode, day, close, historicalNav)
-            }
+            historyStore.upsert(insCode, day, close, navByDate[day])
         }
 
         // TSETMC NAV history often has fewer than 60 matching observations.
