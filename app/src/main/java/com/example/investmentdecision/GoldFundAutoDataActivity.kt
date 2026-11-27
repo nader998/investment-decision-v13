@@ -380,16 +380,43 @@ class GoldFundAutoDataActivity : Activity() {
         }
         val wanted = setOf(normalizeFundName(fundName), normalizeFundName(symbol))
             .filter { it.isNotBlank() }.toSet()
+        // Prefer the registry's exact symbol/name fields, then use a conservative
+        // token match. This handles Persian/Arabic spelling and punctuation variants
+        // without silently selecting a different fund.
         var registrationNumber: String? = null
+        var bestRegistryScore = 0
+        var registryTie = false
         for (i in 0 until registry.length()) {
             val row = registry.optJSONObject(i) ?: continue
-            val names = listOf("mfName", "FundName", "name", "lVal18AFC", "symbol")
-                .mapNotNull { firstString(row, it) }.map { normalizeFundName(it) }
-            if (names.any { it in wanted }) {
-                registrationNumber = firstString(row, "regNo", "RegistrationNumber", "registrationNumber")
-                if (registrationNumber != null) break
+            val candidateNames = listOf(
+                "mfName", "FundName", "fundName", "name", "lVal18AFC", "symbol",
+                "Symbol", "title", "Title", "shortName"
+            ).mapNotNull { firstString(row, it) }.map { normalizeFundName(it) }.filter { it.isNotBlank() }
+            val score = candidateNames.maxOfOrNull { candidate ->
+                when {
+                    candidate in wanted -> 100
+                    wanted.any { it.length >= 4 && (candidate.contains(it) || it.contains(candidate)) } -> 85
+                    else -> {
+                        val candidateTokens = candidate.split(Regex("[^\\p{L}\\p{N}]+"))
+                            .filter { it.length >= 3 }.toSet()
+                        val wantedTokens = wanted.flatMap {
+                            it.split(Regex("[^\\p{L}\\p{N}]+")).filter { token -> token.length >= 3 }
+                        }.toSet()
+                        if (candidateTokens.isEmpty() || wantedTokens.isEmpty()) 0
+                        else candidateTokens.intersect(wantedTokens).size * 100 / wantedTokens.size
+                    }
+                }
+            } ?: 0
+            val regNo = firstString(row, "regNo", "RegistrationNumber", "registrationNumber", "registrationNo")
+            if (regNo != null && score > bestRegistryScore) {
+                registrationNumber = regNo
+                bestRegistryScore = score
+                registryTie = false
+            } else if (regNo != null && score == bestRegistryScore && score > 0 && regNo != registrationNumber) {
+                registryTie = true
             }
         }
+        if (bestRegistryScore < 85 || registryTie) registrationNumber = null
 
         val navByDate = mutableMapOf<String, Double>()
         if (registrationNumber != null) {
@@ -477,37 +504,45 @@ class GoldFundAutoDataActivity : Activity() {
             } ?: 0
             Triple(href, a.text(), score)
         }
-        val best = candidates.maxByOrNull { it.third } ?: return 0
-        if (best.third < 65) return 0
-        val historyUrl = best.first.trimEnd('/') + "/history"
-        val html = downloadHtml(historyUrl)
-        val doc = Jsoup.parse(html, historyUrl)
-        val table = doc.select("table").firstOrNull { t ->
-            val heads = t.select("tr").firstOrNull()?.select("th,td")?.map { it.text() } ?: emptyList()
-            heads.size >= 5 && heads[0].contains("تاریخ") &&
-                heads.any { it.contains("NAV تعدیل") || it.contains("NAV ابطال") } &&
-                heads.any { it.contains("قیمت پایانی") }
-        } ?: return 0
+        // Do not trust a single fuzzy match: fund names on the listing can be
+        // abbreviated or duplicated. Try the strongest candidates and accept only
+        // a page with a recognized history table and valid paired observations.
+        val orderedCandidates = candidates
+            .filter { it.third >= 65 }
+            .distinctBy { it.first }
+            .sortedByDescending { it.third }
+            .take(6)
+        for (candidate in orderedCandidates) {
+            val historyUrl = candidate.first.trimEnd('/') + "/history"
+            val html = try { downloadHtml(historyUrl) } catch (_: Exception) { continue }
+            val doc = Jsoup.parse(html, historyUrl)
+            val table = doc.select("table").firstOrNull { t ->
+                val heads = t.select("tr").firstOrNull()?.select("th,td")?.map { it.text() } ?: emptyList()
+                heads.size >= 5 && heads[0].contains("تاریخ") &&
+                    heads.any { it.contains("NAV تعدیل") || it.contains("NAV ابطال") } &&
+                    heads.any { it.contains("قیمت پایانی") }
+            } ?: continue
 
-        val header = table.select("tr").first().select("th,td").map { it.text().trim() }
-        val navIndex = header.indexOfFirst { it.contains("NAV تعدیل") }
-            .takeIf { it >= 0 } ?: header.indexOfFirst { it.contains("NAV ابطال") }
-        val closeIndex = header.indexOfFirst { it.contains("قیمت پایانی") }
-        if (navIndex < 0 || closeIndex < 0) return 0
+            val header = table.select("tr").first().select("th,td").map { it.text().trim() }
+            val navIndex = header.indexOfFirst { it.contains("NAV تعدیل") }
+                .takeIf { it >= 0 } ?: header.indexOfFirst { it.contains("NAV ابطال") }
+            val closeIndex = header.indexOfFirst { it.contains("قیمت پایانی") }
+            if (navIndex < 0 || closeIndex < 0) continue
 
-        var saved = 0
-        table.select("tr").drop(1).forEach { row ->
-            val cells = row.select("td,th").map { it.text().trim() }
-            if (cells.size <= maxOf(navIndex, closeIndex)) return@forEach
-            val dateKey = parseBourseeyeJalaliDate(cells[0]) ?: return@forEach
-            val nav = parsePersianToman(cells[navIndex]) ?: return@forEach
-            val close = parsePersianToman(cells[closeIndex]) ?: return@forEach
-            if (nav > 0.0 && close > 0.0) {
-                store.upsert(insCode, dateKey, close, nav)
-                saved++
+            var saved = 0
+            table.select("tr").drop(1).forEach { row ->
+                val cells = row.select("td,th").map { it.text().trim() }
+                if (cells.size <= maxOf(navIndex, closeIndex)) return@forEach
+                val dateKey = parseBourseeyeJalaliDate(cells[0]) ?: return@forEach
+                val nav = parsePersianToman(cells[navIndex]) ?: return@forEach
+                val close = parsePersianToman(cells[closeIndex]) ?: return@forEach
+                if (nav > 0.0 && close > 0.0) {
+                    store.upsert(insCode, dateKey, close, nav)
+                    saved++
+                }
             }
+            if (saved > 0) return saved
         }
-        return saved
     }
 
     private fun downloadHtml(address: String): String {
@@ -595,8 +630,13 @@ class GoldFundAutoDataActivity : Activity() {
     }
 
     private fun normalizeFundName(value: String): String =
-        value.replace("ي", "ی").replace("ك", "ک")
-            .replace(Regex("\\s+"), "").trim().lowercase(Locale.ROOT)
+        value.trim()
+            .replace("ي", "ی").replace("ى", "ی")
+            .replace("ك", "ک")
+            .replace("ۀ", "ه").replace("ة", "ه")
+            .replace(Regex("[\\u200c\\u200f\\u200e\\u0640\\s]"), "")
+            .replace(Regex("[^\\p{L}\\p{N}]"), "")
+            .lowercase(Locale.ROOT)
 
     private fun normalizeHistoryDate(value: String): String? {
         // TSETMC dEven and Fund UpdateGregorianDate are Gregorian dates.
