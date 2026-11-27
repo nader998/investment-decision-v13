@@ -60,21 +60,16 @@ class GoldFundAutoDataActivity : Activity() {
     private val pageColor = Color.rgb(243, 246, 250)
     private val cachePrefs by lazy { getSharedPreferences("tsetmc_fund_cache", MODE_PRIVATE) }
 
-    // Explicit release scope: these 31 gold funds had >=60 valid paired
-    // closing-price/NAV observations in the 2026-11-27 Bourseeye probe.
+    // 29 TSETMC gold-fund tickers that the 2026-11-27 probe matched to
+    // Bourseeye pages with at least 60 valid paired close/NAV observations.
+    // The remaining two of 31 valid Bourseeye pages had no safe TSETMC match.
     private val verifiedGoldSymbols = listOf(
-        "عیار", "مثقال", "کهربا", "گنج", "گوهر", "ریتون", "زر", "امرالد",
+        "عیار", "مثقال", "كهربا", "گنج", "گوهر", "ريتون", "امرالد",
         "آلتون", "گلدا", "رز ترنج", "زمرد", "آتش", "جواهر", "جام طلا",
-        "زرفام", "زروان", "لیان", "درخشان", "ناب", "تابش", "نفیس",
-        "زرگر", "قیراط", "رزگلد", "همیان", "میراث", "گلدیس", "درنا",
-        "نگین فارس", "طلا"
+        "زرفام", "زروان", "ليان", "درخشان", "ناب", "تابش", "نفيس",
+        "زرگر", "قيراط", "رزگلد", "هميان", "ميراث", "گلديس", "درنا",
+        "نگين فارس"
     ).map { normalizeFundName(it) }.toSet()
-
-    // Exact IDs for the two short/generic tickers that cannot be fuzzy-matched.
-    private val verifiedBourseeyeIdsBySymbol = mapOf(
-        normalizeFundName("زر") to "1201",
-        normalizeFundName("طلا") to "1328"
-    )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -525,7 +520,6 @@ class GoldFundAutoDataActivity : Activity() {
         val listing = downloadHtml("https://bourseeye.com/funds/gold")
         val links = Jsoup.parse(listing, "https://bourseeye.com").select("a[href]")
         val wantedRaw = listOf(fundName, symbol).filter { it.isNotBlank() }
-        val forcedId = verifiedBourseeyeIdsBySymbol[normalizeFundName(symbol)]
         val candidates = links.mapNotNull { a ->
             val href = a.absUrl("href")
             Regex("/funds/(\\d+)/([^/?#]+)").find(href) ?: return@mapNotNull null
@@ -554,21 +548,16 @@ class GoldFundAutoDataActivity : Activity() {
         // abbreviated or duplicated. Try the strongest candidates and accept only
         // a page with a recognized history table and valid paired observations.
         val orderedCandidates = candidates
-            .filter { candidate ->
-                val candidateId = Regex("/funds/(\\d+)/").find(candidate.first)
-                    ?.groupValues?.getOrNull(1)
-                if (forcedId != null) candidateId == forcedId else candidate.third >= 65
-            }
+            .filter { candidate -> candidate.third >= 65 }
             .distinctBy { it.first }
             .sortedByDescending { it.third }
-        // Explicit IDs bypass fuzzy matching, but not history-table/data validation.
+        // Reject ambiguous fuzzy matches rather than silently assigning
+        // another fund's NAV/price history.
         if (orderedCandidates.isEmpty()) return 0
-        if (forcedId == null) {
-            val bestScore = orderedCandidates.first().third
-            val secondBestScore = orderedCandidates.getOrNull(1)?.third ?: 0
-            if (orderedCandidates.count { it.third == bestScore } != 1 ||
-                bestScore - secondBestScore < 10) return 0
-        }
+        val bestScore = orderedCandidates.first().third
+        val secondBestScore = orderedCandidates.getOrNull(1)?.third ?: 0
+        if (orderedCandidates.count { it.third == bestScore } != 1 ||
+            bestScore - secondBestScore < 10) return 0
         for (candidate in orderedCandidates.take(6)) {
             val historyUrl = candidate.first.trimEnd('/') + "/history"
             val html = try { downloadHtml(historyUrl) } catch (_: Exception) { continue }
