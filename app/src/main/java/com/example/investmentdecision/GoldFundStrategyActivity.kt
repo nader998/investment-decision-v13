@@ -369,12 +369,11 @@ class GoldFundStrategyActivity : Activity() {
             return value
         }
 
-        val r5 = optionalNumber(r5Input, "بازده ۵ روزه") ?: 0.0
-        if (r5Input.text.isNotBlank() && number(r5Input) == null) return
-        val r15 = optionalNumber(r15Input, "بازده ۱۵ روزه") ?: 0.0
-        if (r15Input.text.isNotBlank() && number(r15Input) == null) return
-        val r30 = optionalNumber(r30Input, "بازده ۳۰ روزه") ?: 0.0
-        if (r30Input.text.isNotBlank() && number(r30Input) == null) return
+        // Missing NAV returns must never be converted to numeric zero.
+        // Zero is a valid measured return and must be distinguishable from missing data.
+        val r5 = requiredNumber(r5Input, "بازده ۵ روزه") ?: return
+        val r15 = requiredNumber(r15Input, "بازده ۱۵ روزه") ?: return
+        val r30 = requiredNumber(r30Input, "بازده ۳۰ روزه") ?: return
         val percentile = optionalNumber(premiumPercentileInput, "درصدک حباب ۶۰ روزه") ?: 50.0
         if (premiumPercentileInput.text.isNotBlank() && number(premiumPercentileInput) == null) return
         val volume = optionalNumber(volumeInput, "ارزش معاملات روزانه") ?: 0.0
