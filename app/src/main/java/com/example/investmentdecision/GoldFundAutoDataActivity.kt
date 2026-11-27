@@ -71,6 +71,21 @@ class GoldFundAutoDataActivity : Activity() {
         "نگين فارس"
     ).map { normalizeFundName(it) }.toSet()
 
+    // Exact TSETMC-symbol -> Bourseeye fund IDs, independently checked by the
+    // 2026-11-27 probe. This avoids fragile fuzzy matching for abbreviated names.
+    private val verifiedBourseeyeIdsBySymbol = mapOf(
+        "عیار" to "1521", "مثقال" to "1058", "کهربا" to "1281",
+        "گنج" to "1370", "گوهر" to "1264", "ریتون" to "1273",
+        "امرالد" to "1421", "آلتون" to "1525", "گلدا" to "1424",
+        "رزترنج" to "1208", "زمرد" to "1278", "آتش" to "1318",
+        "جواهر" to "984", "جامطلا" to "1365", "زرفام" to "1105",
+        "زروان" to "1382", "لیان" to "1422", "درخشان" to "1338",
+        "ناب" to "1355", "تابش" to "1291", "نفیس" to "998",
+        "زرگر" to "1360", "قیراط" to "1002", "رزگلد" to "1244",
+        "همیان" to "1161", "میراث" to "1375", "گلدیس" to "1311",
+        "درنا" to "1336", "نگینفارس" to "1371"
+    ).mapKeys { normalizeFundName(it.key) }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.statusBarColor = pageColor
@@ -520,6 +535,7 @@ class GoldFundAutoDataActivity : Activity() {
         val listing = downloadHtml("https://bourseeye.com/funds/gold")
         val links = Jsoup.parse(listing, "https://bourseeye.com").select("a[href]")
         val wantedRaw = listOf(fundName, symbol).filter { it.isNotBlank() }
+        val forcedId = verifiedBourseeyeIdsBySymbol[normalizeFundName(symbol)]
         val candidates = links.mapNotNull { a ->
             val href = a.absUrl("href")
             Regex("/funds/(\\d+)/([^/?#]+)").find(href) ?: return@mapNotNull null
@@ -548,16 +564,22 @@ class GoldFundAutoDataActivity : Activity() {
         // abbreviated or duplicated. Try the strongest candidates and accept only
         // a page with a recognized history table and valid paired observations.
         val orderedCandidates = candidates
-            .filter { candidate -> candidate.third >= 65 }
+            .filter { candidate ->
+                if (forcedId != null) {
+                    Regex("/funds/(\\d+)/").find(candidate.first)?.groupValues?.getOrNull(1) == forcedId
+                } else candidate.third >= 65
+            }
             .distinctBy { it.first }
             .sortedByDescending { it.third }
-        // Reject ambiguous fuzzy matches rather than silently assigning
-        // another fund's NAV/price history.
+        // Exact, probe-verified IDs bypass fuzzy matching. Any unmapped ticker
+        // still uses conservative fuzzy matching and is rejected when ambiguous.
         if (orderedCandidates.isEmpty()) return 0
-        val bestScore = orderedCandidates.first().third
-        val secondBestScore = orderedCandidates.getOrNull(1)?.third ?: 0
-        if (orderedCandidates.count { it.third == bestScore } != 1 ||
-            bestScore - secondBestScore < 10) return 0
+        if (forcedId == null) {
+            val bestScore = orderedCandidates.first().third
+            val secondBestScore = orderedCandidates.getOrNull(1)?.third ?: 0
+            if (orderedCandidates.count { it.third == bestScore } != 1 ||
+                bestScore - secondBestScore < 10) return 0
+        }
         for (candidate in orderedCandidates.take(6)) {
             val historyUrl = candidate.first.trimEnd('/') + "/history"
             val html = try { downloadHtml(historyUrl) } catch (_: Exception) { continue }
