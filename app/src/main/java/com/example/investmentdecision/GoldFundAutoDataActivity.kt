@@ -60,6 +60,22 @@ class GoldFundAutoDataActivity : Activity() {
     private val pageColor = Color.rgb(243, 246, 250)
     private val cachePrefs by lazy { getSharedPreferences("tsetmc_fund_cache", MODE_PRIVATE) }
 
+    // Explicit release scope: these 31 gold funds had >=60 valid paired
+    // closing-price/NAV observations in the 2026-11-27 Bourseeye probe.
+    private val verifiedGoldSymbols = listOf(
+        "عیار", "مثقال", "کهربا", "گنج", "گوهر", "ریتون", "زر", "امرالد",
+        "آلتون", "گلدا", "رز ترنج", "زمرد", "آتش", "جواهر", "جام طلا",
+        "زرفام", "زروان", "لیان", "درخشان", "ناب", "تابش", "نفیس",
+        "زرگر", "قیراط", "رزگلد", "همیان", "میراث", "گلدیس", "درنا",
+        "نگین فارس", "طلا"
+    ).map { normalizeFundName(it) }.toSet()
+
+    // Exact IDs for the two short/generic tickers that cannot be fuzzy-matched.
+    private val verifiedBourseeyeIdsBySymbol = mapOf(
+        normalizeFundName("زر") to "1201",
+        normalizeFundName("طلا") to "1328"
+    )
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.statusBarColor = pageColor
@@ -142,7 +158,8 @@ class GoldFundAutoDataActivity : Activity() {
                     // GetTradeTop/CommodityFund also includes silver and other
                     // commodity ETFs. Keep this gold-only screen from presenting
                     // silver instruments as gold funds.
-                    if (!isGoldFundSymbol(symbol)) continue
+                    // Only expose the 31 funds with validated paired history.
+                    if (normalizeFundName(symbol) !in verifiedGoldSymbols) continue
                     if (candidates.none { it.third == code }) {
                         candidates.add(Triple(symbol, name, code))
                     }
@@ -507,38 +524,51 @@ class GoldFundAutoDataActivity : Activity() {
     ): Int {
         val listing = downloadHtml("https://bourseeye.com/funds/gold")
         val links = Jsoup.parse(listing, "https://bourseeye.com").select("a[href]")
-        val wanted = setOf(normalizeFundName(fundName), normalizeFundName(symbol))
-            .filter { it.length >= 3 }.toSet()
+        val wantedRaw = listOf(fundName, symbol).filter { it.isNotBlank() }
+        val forcedId = verifiedBourseeyeIdsBySymbol[normalizeFundName(symbol)]
         val candidates = links.mapNotNull { a ->
             val href = a.absUrl("href")
-            val m = Regex("/funds/(\\d+)/([^/?#]+)").find(href) ?: return@mapNotNull null
-            val label = normalizeFundName(a.text())
-            val score = wanted.maxOfOrNull { w ->
+            Regex("/funds/(\\d+)/([^/?#]+)").find(href) ?: return@mapNotNull null
+            val rawLabel = a.text()
+            val label = normalizeFundName(rawLabel)
+            val score = wantedRaw.maxOfOrNull { raw ->
+                val wanted = normalizeFundName(raw)
                 when {
-                    label == w -> 100
-                    label.length >= 5 && w.length >= 5 && (label.contains(w) || w.contains(label)) -> 80
-                    else -> {
-                        val tokens = w.split(Regex("[^\\p{L}\\p{N}]+")).filter { it.length >= 3 }.toSet()
-                        val other = label.split(Regex("[^\\p{L}\\p{N}]+")).filter { it.length >= 3 }.toSet()
-                        if (tokens.isEmpty()) 0 else (tokens.intersect(other).size * 100 / tokens.size)
+                    label == wanted -> 100
+                    label.length >= 5 && wanted.length >= 5 &&
+                        (label.contains(wanted) || wanted.contains(label)) -> 88
+                    else {
+                        // Tokenize original text: normalization removes separators.
+                        val tokens = raw.split(Regex("[^\\p{L}\\p{N}]+"))
+                            .map { normalizeFundName(it) }.filter { it.length >= 3 }.toSet()
+                        val other = rawLabel.split(Regex("[^\\p{L}\\p{N}]+"))
+                            .map { normalizeFundName(it) }.filter { it.length >= 3 }.toSet()
+                        if (tokens.isEmpty()) 0
+                        else (tokens.intersect(other).size * 100 / tokens.size)
                     }
                 }
             } ?: 0
-            Triple(href, a.text(), score)
+            Triple(href, rawLabel, score)
         }
         // Do not trust a single fuzzy match: fund names on the listing can be
         // abbreviated or duplicated. Try the strongest candidates and accept only
         // a page with a recognized history table and valid paired observations.
         val orderedCandidates = candidates
-            .filter { it.third >= 65 }
+            .filter { candidate ->
+                val candidateId = Regex("/funds/(\\d+)/").find(candidate.first)
+                    ?.groupValues?.getOrNull(1)
+                if (forcedId != null) candidateId == forcedId else candidate.third >= 65
+            }
             .distinctBy { it.first }
             .sortedByDescending { it.third }
-        // Reject ambiguous top matches. A wrong history page is worse than
-        // showing "data not found", because it silently corrupts fund returns.
-        val bestScore = orderedCandidates.firstOrNull()?.third ?: return 0
-        val secondBestScore = orderedCandidates.getOrNull(1)?.third ?: 0
-        if (orderedCandidates.count { it.third == bestScore } != 1 ||
-            bestScore - secondBestScore < 10) return 0
+        // Explicit IDs bypass fuzzy matching, but not history-table/data validation.
+        if (orderedCandidates.isEmpty()) return 0
+        if (forcedId == null) {
+            val bestScore = orderedCandidates.first().third
+            val secondBestScore = orderedCandidates.getOrNull(1)?.third ?: 0
+            if (orderedCandidates.count { it.third == bestScore } != 1 ||
+                bestScore - secondBestScore < 10) return 0
+        }
         for (candidate in orderedCandidates.take(6)) {
             val historyUrl = candidate.first.trimEnd('/') + "/history"
             val html = try { downloadHtml(historyUrl) } catch (_: Exception) { continue }
